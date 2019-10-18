@@ -23,7 +23,7 @@ static bool is_valid_ptr (void *ptr);
 static struct file *find_file_by_name (char *file_name);
 static struct file *find_file_by_fd (int fd);
 static bool find_exec_by_name (char *file_name);
-static void append_exit_list (struct exited_thread *t, tid_t tid, int exit_status);
+static void append_exit_list (struct exited_thread *t, int exit_status);
 
 void
 syscall_init (void) 
@@ -77,12 +77,17 @@ syscall_handler (struct intr_frame *f)
             its parent automatically take -1 as its exit status. */
     /* wait_sema has 2 functionality:
          1. Ensure that the parent thread waits.
-         2. Synchronize norm_exit_list and child_list. */
+         2. Synchronize exit_list and child_list. */
     if (exit_status != -1)
     {
-      struct exited_thread *t = malloc (sizeof (struct exited_thread));
-      
-      append_exit_list (t, current_thread->tid, exit_status);
+      lock_acquire (&exit_list_lock);
+      // If parent thread already exited, do not allocate exited_thread.
+      if (!current_thread -> parent_exited)
+      {
+        struct exited_thread *t = malloc (sizeof (struct exited_thread));
+        append_exit_list (t, exit_status);
+      }
+      lock_release (&exit_list_lock);
       sema_up (&current_thread->wait_sema);
       thread_exit ();
     }
@@ -510,9 +515,11 @@ find_exec_by_name (char *file_name)
 }
 
 static void
-append_exit_list (struct exited_thread *t, tid_t tid, int exit_status)
+append_exit_list (struct exited_thread *t, int exit_status)
 {
-  t->tid = tid;
+  struct thread *current_thread = thread_current ();
+  t->tid = current_thread->tid;
   t->exit_status = exit_status;
-  list_push_back (&norm_exit_list, &t->elem);
+  t->parent_tid = current_thread->parent->tid;
+  list_push_back (&exit_list, &t->elem);
 }

@@ -15,13 +15,15 @@ struct lock filesys_lock;
 struct list exec_list;
 
 /* List of normally exited thread. */
-struct list norm_exit_list;
+struct list exit_list;
+struct lock exit_list_lock;
 
-/* Struct of element of norm_exit_list. */
+/* Struct of element of exit_list. */
 struct exited_thread
 {
   struct list_elem elem;
   tid_t tid;
+  tid_t parent_tid;
   int exit_status;
 };
 

@@ -117,6 +117,9 @@ struct thread
     struct lock child_list_lock;        /* Synchronize child list. */
     int exit_status;                    /* -1 if abnormal exit. */
     
+    /* Used for avoiding memory leak. */
+    bool parent_exited;                 /* If true, do not malloc thread_exited. */
+    
     /* Used for denying writes. */
     struct list_elem exec_elem;         /* List element for exec list. */
     

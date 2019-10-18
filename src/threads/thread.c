@@ -95,7 +95,8 @@ thread_init (void)
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&exec_list);
-  list_init (&norm_exit_list);
+  list_init (&exit_list);
+  lock_init (&exit_list_lock);
   
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -482,6 +483,7 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init (&t->child_list_lock);
   t->exit_status = 0;
   t->removed = false;
+  t->parent_exited = false;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

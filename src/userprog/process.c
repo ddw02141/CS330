@@ -25,6 +25,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 static struct thread *find_thread (tid_t tid);
 static int find_exited_thread (tid_t tid);
 static void file_all_close (void);
+static void free_child_info (void);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -84,9 +85,7 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   
   /* The load accesses to file system which is critical section. */
-  lock_acquire (&filesys_lock);
   success = load (file_name, &if_.eip, &if_.esp);
-  lock_release (&filesys_lock);
   
   /* Append the current thread into exec list,
      to deny any write to the running file. */
@@ -98,7 +97,7 @@ start_process (void *file_name_)
     parent->load_success = false;
     sema_up (&parent->exec_sema);
     palloc_free_page (file_name);
-    thread_exit ();
+    error_exit ();
   }
   
   /* If load succeed, inform to parent. */
@@ -171,6 +170,7 @@ start_process (void *file_name_)
   
   if_.esp = esp;
   
+  palloc_free_page (file_name);
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -194,6 +194,7 @@ int
 process_wait (tid_t child_tid) 
 {
   struct thread *current_thread = thread_current ();
+  int exit_status;
   
   lock_acquire (&current_thread->child_list_lock);
   struct thread *child_thread = find_thread (child_tid);
@@ -206,7 +207,11 @@ process_wait (tid_t child_tid)
        4. child_tid is invalid. */
   if (child_thread == NULL)
   {
-    return find_exited_thread (child_tid);
+    lock_acquire (&exit_list_lock);
+    exit_status = find_exited_thread (child_tid);
+    lock_release (&exit_list_lock);
+    
+    return exit_status;
   }
   /* There's only one case:
        1. Child thread not exited yet.
@@ -216,9 +221,14 @@ process_wait (tid_t child_tid)
     /* Wait for the wait_lock of the child thread:
          1. The wait_lock will be released if child terminates.
          2. We can ensure that the information of child thread
-            is inserted into the norm_exit_list. */
+            is inserted into the exit_list. */
     sema_down(&child_thread->wait_sema);
-    return find_exited_thread (child_tid);
+    
+    lock_acquire (&exit_list_lock);
+    exit_status = find_exited_thread (child_tid);
+    lock_release (&exit_list_lock);
+    
+    return exit_status;
   }
 }
 
@@ -229,21 +239,42 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
   
+  /************************************************/
+  /* This thread is a child thread of one thread. */
+  /************************************************/
+  
   /* Remove this thread from exec_list.
      After the executable exits, it should be allow writes. */
   list_remove (&cur->exec_elem);
   
   /* Remove this thread from child_list. */
+  lock_acquire (&cur->parent->child_list_lock);
   if (!cur->removed)
   {
-    lock_acquire (&cur->parent->child_list_lock);
     list_remove (&cur->celem);
-    lock_release (&cur->parent->child_list_lock);
   }
+  lock_release (&cur->parent->child_list_lock);
   
   /* Close all the opened file by this thread. */
   file_all_close ();
   
+  // Debug.
+  //printf("reamining file should be zero: %d\n", list_size(&cur->file_list));
+  /*************************************************/
+  /* This thread is a parent thread of one thread. */
+  /*************************************************/
+  
+  // Debug.
+  //printf ("before: %d\n", list_size (&exit_list));
+  /* Free the allocated 'exited_thread' struct. */
+  lock_acquire (&cur->child_list_lock);
+  lock_acquire (&exit_list_lock);
+  free_child_info ();
+  lock_release (&exit_list_lock);
+  lock_release (&cur->child_list_lock);
+  
+  // Debug.
+  //printf ("after: %d\n", list_size (&exit_list));
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -321,11 +352,11 @@ find_exited_thread (tid_t tid)
 {
   struct list_elem *e;
   
-  if (list_empty (&norm_exit_list))
+  if (list_empty (&exit_list))
     return -1;
   
-  for (e = list_begin (&norm_exit_list);
-       e != list_end (&norm_exit_list);
+  for (e = list_begin (&exit_list);
+       e != list_end (&exit_list);
        e = list_next (e))
   {
     struct exited_thread *t =
@@ -363,6 +394,57 @@ file_all_close (void)
     lock_acquire (&filesys_lock);
     file_close (file);
     lock_release (&filesys_lock);
+  }
+}
+
+/* Free all the child info of the current thread.
+   Set child->removed true to avoid double removing of
+   elements of current_thread's child_list, and
+   set child->parent_exited true to avoid malloc of
+   children who are not exited yet. */
+static void
+free_child_info (void)
+{
+  struct thread *current_thread = thread_current ();
+  struct list *child_list = &current_thread->child_list;
+  struct list_elem *e1, *e2;
+  
+  if (list_empty (&exit_list) || list_empty (child_list))
+  {
+    return;
+  }
+  
+  /* Set child->removed true to avoid double removing.
+     Set child->parent_exited true to make children who
+       are not exited yet do not allocate
+       struct exited_thread. */
+  e1 = list_begin (child_list);
+  while (e1 != list_end (child_list))
+  {
+    struct thread *child =
+      list_entry (e1, struct thread, celem);
+    
+    child->removed = true;
+    child->parent_exited = true;
+    e1 = list_next (e1);
+  }
+  
+  /* Free all the struct exited_thread of  already exited children
+     to avoid memory leak. */
+  e2 = list_begin (&exit_list);
+  while (e2 != list_end (&exit_list))
+  {
+    struct exited_thread *t =
+      list_entry (e2, struct exited_thread, elem);
+    if (t->parent_tid == current_thread->tid)
+    {
+      e2 = list_remove (&t->elem);
+      free (t);
+    }
+    else
+    {
+      e2 = list_next (e2);
+    }
   }
 }
 
@@ -457,7 +539,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
+  lock_acquire (&filesys_lock);
   file = filesys_open (file_name);
+  lock_release (&filesys_lock);
+  
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -465,7 +550,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
   
   /* Read and verify executable header. */
-  if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
+  lock_acquire (&filesys_lock);
+  off_t ehdr_read_size = file_read (file, &ehdr, sizeof ehdr);
+  lock_release (&filesys_lock);
+  
+  if (ehdr_read_size != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
       || ehdr.e_type != 2
       || ehdr.e_machine != 3
@@ -485,9 +574,16 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
       if (file_ofs < 0 || file_ofs > file_length (file))
         goto done;
+      
+      lock_acquire (&filesys_lock);
       file_seek (file, file_ofs);
-
-      if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
+      lock_release (&filesys_lock);
+      
+      lock_acquire (&filesys_lock);
+      off_t phdr_read_size = file_read (file, &phdr, sizeof phdr);
+      lock_release (&filesys_lock);
+      
+      if (phdr_read_size != sizeof phdr)
         goto done;
       file_ofs += sizeof phdr;
       switch (phdr.p_type) 
@@ -547,7 +643,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
+  lock_acquire (&filesys_lock);
   file_close (file);
+  lock_release (&filesys_lock);
+  
   return success;
 }
 
@@ -621,8 +720,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
-
+  
+  lock_acquire (&filesys_lock);
   file_seek (file, ofs);
+  lock_release (&filesys_lock);
+  
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -637,7 +739,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         return false;
 
       /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      lock_acquire (&filesys_lock);
+      off_t kpage_read_size = file_read (file, kpage, page_read_bytes);
+      lock_release (&filesys_lock);
+      
+      if (kpage_read_size != (int) page_read_bytes)
         {
           palloc_free_page (kpage);
           return false; 
