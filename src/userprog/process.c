@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "vm/frame.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -200,11 +201,12 @@ process_wait (tid_t child_tid)
   struct thread *child_thread = find_thread (child_tid);
   lock_release (&current_thread->child_list_lock);
   
-  /* There're four cases:
+  /* There're five cases:
        1. child_tid is not a tid of child thread.
        2. Child thread already exited normally.
        3. Child thread already exited by kernel.
-       4. child_tid is invalid. */
+       4. child_tid is invalid.
+       5. This thread(parent) already waited the child_thread.*/
   if (child_thread == NULL)
   {
     lock_acquire (&exit_list_lock);
@@ -258,14 +260,10 @@ process_exit (void)
   /* Close all the opened file by this thread. */
   file_all_close ();
   
-  // Debug.
-  //printf("reamining file should be zero: %d\n", list_size(&cur->file_list));
   /*************************************************/
   /* This thread is a parent thread of one thread. */
   /*************************************************/
   
-  // Debug.
-  //printf ("before: %d\n", list_size (&exit_list));
   /* Free the allocated 'exited_thread' struct. */
   lock_acquire (&cur->child_list_lock);
   lock_acquire (&exit_list_lock);
@@ -273,8 +271,6 @@ process_exit (void)
   lock_release (&exit_list_lock);
   lock_release (&cur->child_list_lock);
   
-  // Debug.
-  //printf ("after: %d\n", list_size (&exit_list));
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;

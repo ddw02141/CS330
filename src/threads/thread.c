@@ -13,6 +13,7 @@
 #include "threads/vaddr.h"
 #include "lib/kernel/list.h"
 #include "userprog/syscall.h"
+#include "vm/frame.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -97,6 +98,7 @@ thread_init (void)
   list_init (&exec_list);
   list_init (&exit_list);
   lock_init (&exit_list_lock);
+  lock_init (&frame_table_lock);
   
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -478,7 +480,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->parent = NULL;
   sema_init (&t->exec_sema, 0);
   sema_init (&t->wait_sema, 0);
-  sema_init (&t->exit_sema, 0);
   list_init (&t->child_list);
   lock_init (&t->child_list_lock);
   t->exit_status = 0;

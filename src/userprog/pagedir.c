@@ -107,11 +107,14 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
   ASSERT (pd != init_page_dir);
 
   pte = lookup_page (pd, upage, true);
-
+  
   if (pte != NULL) 
     {
       ASSERT ((*pte & PTE_P) == 0);
       *pte = pte_create_user (kpage, writable);
+      
+      // Pass pte_get_page to frame table managing function.
+      frame_new_usage (upage, *pte);
       return true;
     }
   else

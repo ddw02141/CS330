@@ -4,9 +4,6 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
-/* Semaphore for parent thread to wait child's load. */
-struct semaphore exec_sema;
-
 /* Lock for synchronization of file system. */
 struct lock filesys_lock;
 

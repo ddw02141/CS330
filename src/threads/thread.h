@@ -112,7 +112,6 @@ struct thread
     struct list_elem celem;             /* List element for child list. */
     bool removed;                       /* true if this thread is removed from parent. */
     struct semaphore wait_sema;         /* Parent waits on this sema. */
-    struct semaphore exit_sema;         /* Synchronize exit list and child list. */
     struct list child_list;             /* List of child threads. */
     struct lock child_list_lock;        /* Synchronize child list. */
     int exit_status;                    /* -1 if abnormal exit. */
