@@ -16,6 +16,8 @@ struct frame_entry
 struct lock frame_table_lock;
 
 /* Function prototypes. */
-void frame_new_usage (void *upage, uint32_t pte);
+void frame_new_usage (void *upage, uint32_t *pte);
+void frame_free (uint32_t *pte);
+struct frame_entry *frame_entry_lookup (void *frame_addr);
 unsigned frame_hash_func (const struct hash_elem *elem, void *aux);
 bool frame_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux);

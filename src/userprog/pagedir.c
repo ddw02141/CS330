@@ -40,8 +40,11 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pte;
         
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P) 
+          if (*pte & PTE_P)	// This is present page.
+          {
+            frame_free (pte);
             palloc_free_page (pte_get_page (*pte));
+          }
         palloc_free_page (pt);
       }
   palloc_free_page (pd);
@@ -108,13 +111,19 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 
   pte = lookup_page (pd, upage, true);
   
+  if (pte == NULL)
+  {
+    // Need evicting.
+    ;
+  }
+  
   if (pte != NULL) 
     {
       ASSERT ((*pte & PTE_P) == 0);
       *pte = pte_create_user (kpage, writable);
       
-      // Pass pte_get_page to frame table managing function.
-      frame_new_usage (upage, *pte);
+      /* Record new usage of frame at the frame table. */
+      frame_new_usage (upage, pte);
       return true;
     }
   else
@@ -154,7 +163,9 @@ pagedir_clear_page (uint32_t *pd, void *upage)
   pte = lookup_page (pd, upage, false);
   if (pte != NULL && (*pte & PTE_P) != 0)
     {
-      *pte &= ~PTE_P;
+      /* Update the frame table. */
+      frame_free (*pte);
+      
       invalidate_pagedir (pd);
     }
 }
