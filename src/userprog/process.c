@@ -20,6 +20,7 @@
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
 #include "vm/frame.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -285,7 +286,8 @@ process_exit (void)
          that's been freed (and cleared). */
       cur->pagedir = NULL;
       pagedir_activate (NULL);
-      pagedir_destroy (pd);
+      supp_free_all (pd, cur);
+      //pagedir_destroy (pd);
     }
 }
 
@@ -730,7 +732,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+      uint8_t *kpage = frame_obtain (PAL_USER);
       if (kpage == NULL)
         return false;
 
@@ -769,7 +771,7 @@ setup_stack (void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = frame_obtain (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
@@ -798,5 +800,5 @@ install_page (void *upage, void *kpage, bool writable)
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
-          && pagedir_set_page (t->pagedir, upage, kpage, writable));
+          && supp_new_mapping (t->pagedir, upage, kpage, writable, t));
 }

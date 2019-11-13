@@ -5,6 +5,8 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -42,7 +44,6 @@ pagedir_destroy (uint32_t *pd)
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
           if (*pte & PTE_P)	// This is present page.
           {
-            frame_free (pte);
             palloc_free_page (pte_get_page (*pte));
           }
         palloc_free_page (pt);
@@ -56,7 +57,7 @@ pagedir_destroy (uint32_t *pd)
    on CREATE.  If CREATE is true, then a new page table is
    created and a pointer into it is returned.  Otherwise, a null
    pointer is returned. */
-static uint32_t *
+uint32_t *
 lookup_page (uint32_t *pd, const void *vaddr, bool create)
 {
   uint32_t *pt, *pde;
@@ -110,20 +111,11 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
   ASSERT (pd != init_page_dir);
 
   pte = lookup_page (pd, upage, true);
-  
-  if (pte == NULL)
-  {
-    // Need evicting.
-    ;
-  }
-  
+   
   if (pte != NULL) 
     {
       ASSERT ((*pte & PTE_P) == 0);
       *pte = pte_create_user (kpage, writable);
-      
-      /* Record new usage of frame at the frame table. */
-      frame_new_usage (upage, pte);
       return true;
     }
   else
@@ -162,10 +154,7 @@ pagedir_clear_page (uint32_t *pd, void *upage)
 
   pte = lookup_page (pd, upage, false);
   if (pte != NULL && (*pte & PTE_P) != 0)
-    {
-      /* Update the frame table. */
-      frame_free (*pte);
-      
+    { 
       invalidate_pagedir (pd);
     }
 }

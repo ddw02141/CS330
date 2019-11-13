@@ -23,6 +23,7 @@
 #include "threads/pte.h"
 #include "threads/thread.h"
 #include "vm/frame.h"
+#include "vm/page.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "userprog/exception.h"
@@ -100,8 +101,9 @@ main (void)
   malloc_init ();
   paging_init ();
 
-  /* Initialize frame table after malloc is initialized. */
+  /* Initialize frame table and supplementary page table after malloc is initialized. */
   hash_init (&frame_table, frame_hash_func, frame_less_func, NULL);
+  hash_init (&supp_page_table, supp_hash_func, supp_less_func, NULL);
 
   /* Segmentation. */
 #ifdef USERPROG

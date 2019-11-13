@@ -1,4 +1,5 @@
 #include "lib/kernel/hash.h"
+#include "threads/palloc.h"
 #include "threads/synch.h"
 
 /* A frame table containing currently being used frames by user pages. */
@@ -16,7 +17,8 @@ struct frame_entry
 struct lock frame_table_lock;
 
 /* Function prototypes. */
-void frame_new_usage (void *upage, uint32_t *pte);
+void *frame_obtain (enum palloc_flags);
+bool frame_new_usage (void *upage, uint32_t *pte);
 void frame_free (uint32_t *pte);
 struct frame_entry *frame_entry_lookup (void *frame_addr);
 unsigned frame_hash_func (const struct hash_elem *elem, void *aux);
