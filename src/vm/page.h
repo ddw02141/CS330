@@ -13,31 +13,31 @@ struct supp_table_entry
 {
   struct hash_elem hash_elem;
   uint32_t *pd;
-  void *frame_addr;
-  void *page_addr;
+  void *upage;
+  void *kpage;
+  bool writable;
+  struct thread *thread;
   bool valid;	// 1 if in memory, 0 if in swap disk.
 };
 
-/* The format of mapping list entry.
-   A mapping list is used for tracking all the mapping information
-   related with a thread.
-   Especially, a mapping list is useful when the supplemental page
-   and the frame table should be updated with respect to a
-   pagedir_destroy. */
-struct mapping_list_entry
+/* The format of a upage list entry.
+   The upage list of a thread is useful when the thread terminates,
+   which requires frees in supp_page_table, frame_table, or disk. */
+struct upage_list_entry
 {
   struct list_elem elem;
-  void *page_addr;
-  uint32_t *pte;
+  void *upage;
 };
 
-/* A lock used to synchronize acccess to the supplemental page table. */
+/* A lock used to synchronize acccesses to the supplemental page table. */
 struct lock supp_table_lock;
 
 /* Function prototypes. */
+void *frame_obtain (enum palloc_flags);
 bool supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t);
 void supp_free_all (uint32_t *pd, struct thread *t);
-void supp_free_mapping (void *upage);
-struct supp_table_entry *supp_table_entry_lookup (void *upage);
+void supp_free_mapping (uint32_t *pd, void *upage);
+bool restore_page (uint32_t *pd, void *uaddr);
+struct supp_table_entry *supp_table_entry_lookup (uint32_t *pd, void *upage);
 unsigned supp_hash_func (const struct hash_elem *elem, void *aux);
 bool supp_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux);

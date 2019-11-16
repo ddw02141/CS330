@@ -154,7 +154,8 @@ pagedir_clear_page (uint32_t *pd, void *upage)
 
   pte = lookup_page (pd, upage, false);
   if (pte != NULL && (*pte & PTE_P) != 0)
-    { 
+    {
+      *pte &= ~PTE_P;
       invalidate_pagedir (pd);
     }
 }

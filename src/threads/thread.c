@@ -15,6 +15,7 @@
 #include "userprog/syscall.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#include "vm/swap.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -101,6 +102,8 @@ thread_init (void)
   lock_init (&exit_list_lock);
   lock_init (&frame_table_lock);
   lock_init (&supp_table_lock);
+  lock_init (&swap_table_lock);
+  lock_init (&swap_bitmap_lock);
   
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -487,8 +490,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->exit_status = 0;
   t->removed = false;
   t->parent_exited = false;
-  list_init (&t->mapping_list);
-  lock_init (&t->mapping_list_lock);
+  list_init (&t->upage_list);
+  lock_init (&t->upage_list_lock);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

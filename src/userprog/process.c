@@ -97,7 +97,6 @@ start_process (void *file_name_)
   if (!success)
   {
     parent->load_success = false;
-    sema_up (&parent->exec_sema);
     palloc_free_page (file_name);
     error_exit ();
   }
@@ -240,15 +239,12 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
+  struct thread *parent = cur->parent;
   uint32_t *pd;
   
   /************************************************/
   /* This thread is a child thread of one thread. */
   /************************************************/
-  
-  /* Remove this thread from exec_list.
-     After the executable exits, it should be allow writes. */
-  list_remove (&cur->exec_elem);
   
   /* Remove this thread from child_list. */
   lock_acquire (&cur->parent->child_list_lock);
@@ -271,6 +267,18 @@ process_exit (void)
   free_child_info ();
   lock_release (&exit_list_lock);
   lock_release (&cur->child_list_lock);
+  
+  /************************************************/
+  /* This thread is a child thread of one thread. */
+  /************************************************/
+  
+  /* Remove this thread from exec_list.
+     After the executable exits, it should allow writes. */
+  list_remove (&cur->exec_elem);
+  
+  /* If a exec fails to load, wake up its parent. */
+  sema_up (&parent->exec_sema);
+  
   
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

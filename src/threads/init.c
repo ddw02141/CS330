@@ -24,6 +24,7 @@
 #include "threads/thread.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#include "vm/swap.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "userprog/exception.h"
@@ -101,9 +102,11 @@ main (void)
   malloc_init ();
   paging_init ();
 
-  /* Initialize frame table and supplementary page table after malloc is initialized. */
+  /* Initialize frame table, supplementary page table,
+     and swapping related data structures after malloc is initialized. */
   hash_init (&frame_table, frame_hash_func, frame_less_func, NULL);
   hash_init (&supp_page_table, supp_hash_func, supp_less_func, NULL);
+  hash_init (&swap_table, swap_hash_func, swap_less_func, NULL);
 
   /* Segmentation. */
 #ifdef USERPROG
@@ -134,6 +137,9 @@ main (void)
 #endif
 
   printf ("Boot complete.\n");
+  
+  /* Initialize swapping related data structures. */
+  swap_init ();
   
   /* Run actions specified on kernel command line. */
   run_actions (argv);

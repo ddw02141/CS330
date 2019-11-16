@@ -122,10 +122,9 @@ struct thread
     /* Used for denying writes. */
     struct list_elem exec_elem;         /* List element for exec list. */
     
-    /* Record upage, and kpage information of pagedir. */
-    struct list mapping_list;		/* List of pairs of upage and kpage. */
-    struct lock mapping_list_lock;      /* Synchronize mapping list. */
-    
+    /* Used for page destroy. */
+    struct list upage_list;		/* List of upages addresses. */
+    struct lock upage_list_lock;	/* Synchronize upage_list. */
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
