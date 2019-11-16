@@ -90,7 +90,7 @@ swap_free (uint32_t *pd, void *upage)
   /* Update the swap bitmap.
      And do not initialize the actual swap disk. */
   lock_acquire (&swap_bitmap_lock);
-  bitmap_set_multiple (&swap_bitmap, target_entry->idx, 8, false);
+  bitmap_set_multiple (&swap_bitmap, target_entry->bitmap_idx, 8, false);
   lock_release (&swap_bitmap_lock);
   
   /* Remove the entry from the swap table,
@@ -145,7 +145,7 @@ swap_table_entry_lookup (uint32_t *pd, void *upage)
   
   entry.pd = pd;
   entry.upage = upage;
-  e = hash_find (&swap_page_table, &entry.hash_elem);
+  e = hash_find (&swap_table, &entry.hash_elem);
   return e != NULL ? hash_entry (e, struct swap_table_entry, hash_elem) : NULL;
 }
 

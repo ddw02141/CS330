@@ -67,7 +67,7 @@ frame_obtain (enum palloc_flags flags)
    If the addition of mapping is succeed, update supplemental page table,
    and the frame table. */
 bool
-supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t)
+supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags flags)
 {
   /* Add a mapping from upage which is a virtual address
      to frame which is a physical address of the corresponding frame.
@@ -96,6 +96,7 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     new_entry->kpage = kpage;
     new_entry->writable = writable;
     new_entry->thread = t;
+    new_entry->flags = flags;
     new_entry->valid = true;
     
     /* Update the supplemental page table. */
@@ -211,7 +212,7 @@ restore_page (uint32_t *pd, void *uaddr)
     return false;
   }
   /* Obtain a frame. */
-  void *kpage = frame_obtain ();
+  void *kpage = frame_obtain (target_entry->flags);
   if (kpage == NULL)
   {
     printf ("Fail: Restore page with frame obtain.\n ");
@@ -227,7 +228,7 @@ restore_page (uint32_t *pd, void *uaddr)
   
   /* Set real mapping, update the supplemental page table,
      and the frame table. */
-  if (!supp_new_mapping (pd, upage, kpage, target_entry->writeable, target_entry->thread))
+  if (!supp_new_mapping (pd, upage, kpage, target_entry->writable, target_entry->thread, target_entry->flags))
   {
     printf ("Fail: restore_page with supp_new_mapping.\n");
     return false;

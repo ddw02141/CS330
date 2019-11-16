@@ -1,5 +1,6 @@
 #include "lib/kernel/hash.h"
 #include "lib/kernel/list.h"
+#include "threads/palloc.h"
 #include "threads/synch.h"
 
 /* A supplemental page table which records mappings from user pages to frames. */
@@ -17,6 +18,7 @@ struct supp_table_entry
   void *kpage;
   bool writable;
   struct thread *thread;
+  enum palloc_flags flags;
   bool valid;	// 1 if in memory, 0 if in swap disk.
 };
 
@@ -34,7 +36,7 @@ struct lock supp_table_lock;
 
 /* Function prototypes. */
 void *frame_obtain (enum palloc_flags);
-bool supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t);
+bool supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags);
 void supp_free_all (uint32_t *pd, struct thread *t);
 void supp_free_mapping (uint32_t *pd, void *upage);
 bool restore_page (uint32_t *pd, void *uaddr);

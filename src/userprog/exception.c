@@ -4,7 +4,9 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
 #include "userprog/syscall.h"
+#include "vm/page.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -152,12 +154,19 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
+  /*
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  error_exit ();
-//  kill (f);
+          user ? "user" : "kernel");*/
+  if (fault_addr == NULL)
+    error_exit ();
+  if (user && is_kernel_vaddr (fault_addr))
+    error_exit ();
+  
+  struct thread *t = thread_current ();
+  if (!restore_page (t->pagedir, fault_addr))
+    error_exit ();
 }
 

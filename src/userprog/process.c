@@ -103,7 +103,7 @@ start_process (void *file_name_)
   
   /* If load succeed, inform to parent. */
   parent->load_success = true;
-  sema_up (&parent->exec_sema);
+  //sema_up (&parent->exec_sema);
   
   /* Push parsed arguments into the user stack. */
   void *esp = if_.esp;
@@ -658,7 +658,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
 /* load() helpers. */
 
-static bool install_page (void *upage, void *kpage, bool writable);
+static bool install_page (void *upage, void *kpage, bool writable, enum palloc_flags);
 
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
@@ -757,7 +757,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
       /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
+      if (!install_page (upage, kpage, writable, PAL_USER)) 
         {
           palloc_free_page (kpage);
           return false; 
@@ -782,7 +782,7 @@ setup_stack (void **esp)
   kpage = frame_obtain (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true, PAL_USER | PAL_ZERO);
       if (success)
         *esp = PHYS_BASE;
       else
@@ -801,12 +801,12 @@ setup_stack (void **esp)
    Returns true on success, false if UPAGE is already mapped or
    if memory allocation fails. */
 static bool
-install_page (void *upage, void *kpage, bool writable)
+install_page (void *upage, void *kpage, bool writable, enum palloc_flags flags)
 {
   struct thread *t = thread_current ();
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
-          && supp_new_mapping (t->pagedir, upage, kpage, writable, t));
+          && supp_new_mapping (t->pagedir, upage, kpage, writable, t, flags));
 }
