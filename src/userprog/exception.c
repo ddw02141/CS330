@@ -160,13 +160,55 @@ page_fault (struct intr_frame *f)
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");*/
-  if (fault_addr == NULL)
-    error_exit ();
+  
+  /* Check if this page fault is demanding of stack growth.
+     The stack can grow at most 8MB.*/
+  struct thread *t = thread_current ();
+  void *esp = f->esp;
+  void *stack_page = t->stack_bound;
+  void *fault_page = pg_round_down (fault_addr);
+  
+  /* If fault_addr is in kernel page, exit. */
   if (user && is_kernel_vaddr (fault_addr))
     error_exit ();
   
-  struct thread *t = thread_current ();
-  if (!restore_page (t->pagedir, fault_addr))
+  /* Stack cannot grow at most 8MB. */
+  if (fault_page < SG_LIMIT)
     error_exit ();
+  
+  /* Try restoring of the page. */
+  if (restore_page (t->pagedir, fault_addr))
+    return;
+  
+  /* If esp exceeds the current stack_bound, grow the stack.
+     Demanding of stack growth exceeding limit is detected
+     already. */
+  if (esp <= stack_page)
+  {
+    /* Calculate how much page is needed to grow the stack. */
+    unsigned num_page = (unsigned) (stack_page - fault_page) / (unsigned) PGSIZE;
+    void *upage = stack_page;
+    while (num_page > 0)
+    {
+      upage -= PGSIZE;
+      void *kpage = frame_obtain (PAL_USER | PAL_ZERO);
+      if (kpage  == NULL)
+      {
+        printf ("Fail: Stack growth with frame obtain.\n");
+        error_exit ();
+      }
+      if (!supp_new_mapping (t->pagedir, upage, kpage, true, t, PAL_USER | PAL_ZERO))
+      {
+        printf ("Fail: Stack growth with supp_new_mapping.\n");
+        error_exit ();
+      }
+      t->stack_bound = upage;
+      num_page--;
+    }
+    return;
+  }
+  
+  //printf ("Fail: Page fault with unknown reason.\n");
+  error_exit ();
 }
 

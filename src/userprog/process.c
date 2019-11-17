@@ -254,7 +254,12 @@ process_exit (void)
   }
   lock_release (&cur->parent->child_list_lock);
   
-  /* Close all the opened file by this thread. */
+  /* Close all the opened file by this thread.
+     First check if the current thread is  already
+     holding filesys lock. It is possible if this
+     exit is due to page fault during file read. */
+  if (lock_held_by_current_thread (&filesys_lock))
+    lock_release (&filesys_lock);
   file_all_close ();
   
   /*************************************************/
@@ -776,6 +781,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
+  struct thread *current_thread = thread_current ();
   uint8_t *kpage;
   bool success = false;
 
@@ -784,7 +790,10 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true, PAL_USER | PAL_ZERO);
       if (success)
+      {
         *esp = PHYS_BASE;
+        current_thread->stack_bound = PHYS_BASE - PGSIZE;
+      }
       else
         palloc_free_page (kpage);
     }

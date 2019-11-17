@@ -204,6 +204,12 @@ restore_page (uint32_t *pd, void *uaddr)
   void *upage = pg_round_down (uaddr);
   struct supp_table_entry *target_entry = supp_table_entry_lookup (pd, upage);
   
+  /* If there's no such page, return false. */
+  if (target_entry == NULL)
+  {
+    return false;
+  }
+  
   /* If given page is already in frame, it means that
      there's an implementation fault. */
   if (target_entry->valid)

@@ -125,6 +125,10 @@ struct thread
     /* Used for page destroy. */
     struct list upage_list;		/* List of upages addresses. */
     struct lock upage_list_lock;	/* Synchronize upage_list. */
+    
+    /* Used for check current stack boundary. */
+    void *stack_bound;			/* Boundary of current stack. */
+    
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
