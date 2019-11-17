@@ -2,9 +2,20 @@
 #include "lib/kernel/list.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
+#include "filesys/off_t.h"
+#include "filesys/file.h"
+#include <stdio.h>
 
 /* A supplemental page table which records mappings from user pages to frames. */
 struct hash supp_page_table;
+
+/* The location of a page. */
+enum mapping_position
+{
+  MEMORY = 0,
+  SWAPDISK = 1,
+  LAZY = 2
+};
 
 /* The format of a supplemental page table entry.
    Supplemental page table should have enough information
@@ -19,7 +30,12 @@ struct supp_table_entry
   bool writable;
   struct thread *thread;
   enum palloc_flags flags;
-  bool valid;	// 1 if in memory, 0 if in swap disk.
+  
+  /* Used for lazy loading. */
+  enum mapping_position position;
+  bool all_zero;
+  struct file *file;
+  off_t ofs;
 };
 
 /* The format of a upage list entry.
@@ -36,7 +52,7 @@ struct lock supp_table_lock;
 
 /* Function prototypes. */
 void *frame_obtain (enum palloc_flags);
-bool supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags);
+bool supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags, bool lazy, bool all_zero, struct file *file, off_t ofs);
 void supp_free_all (uint32_t *pd, struct thread *t);
 void supp_free_mapping (uint32_t *pd, void *upage);
 bool restore_page (uint32_t *pd, void *uaddr);

@@ -4,6 +4,7 @@
 #include "vm/page.h"
 #include "vm/swap.h"
 #include "userprog/pagedir.h"
+#include "userprog/exception.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
@@ -11,6 +12,8 @@
 #include "threads/thread.h"
 #include <stdio.h>
 #include "devices/block.h"
+#include "filesys/off_t.h"
+#include "filesys/file.h"
 
 /* Implementation of Supplemental page table and related functions. */
 
@@ -44,7 +47,7 @@ frame_obtain (enum palloc_flags flags)
     /* Update the supplemental page table. */
     struct supp_table_entry *entry = supp_table_entry_lookup (victim->pd, victim->upage);
     entry->kpage = NULL;
-    entry->valid = false;
+    entry->position = SWAPDISK;
     
     /* Clear the victim page, update the frame table, and free the entry. */
     pagedir_clear_page (victim->pd, victim->upage);
@@ -67,16 +70,20 @@ frame_obtain (enum palloc_flags flags)
    If the addition of mapping is succeed, update supplemental page table,
    and the frame table. */
 bool
-supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags flags)
+supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags flags, bool lazy, bool all_zero, struct file *file, off_t ofs)
 {
   /* Add a mapping from upage which is a virtual address
      to frame which is a physical address of the corresponding frame.
      If the setting is succeed, update the supplemntal page table and
-     the frame table. */
-  if (!pagedir_set_page (pd, upage, kpage, writable))
+     the frame table.
+     Lazy loading should skip this step. */
+  if (!lazy)
   {
-    printf ("Allocation failed: pagedir_set_page\n.");
-    return false;
+    if (!pagedir_set_page (pd, upage, kpage, writable))
+    {
+      printf ("Allocation failed: pagedir_set_page\n.");
+      return false;
+    }
   }
   
   /* If this mapping is actually new mapping, it requires some more
@@ -97,8 +104,13 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     new_entry->writable = writable;
     new_entry->thread = t;
     new_entry->flags = flags;
-    new_entry->valid = true;
-    
+    new_entry->all_zero = all_zero;
+    new_entry->file = file;
+    new_entry->ofs = ofs;
+    if (lazy)
+      new_entry->position = LAZY;
+    else
+      new_entry->position = MEMORY;
     /* Update the supplemental page table. */
     lock_acquire (&supp_table_lock);
     hash_insert (&supp_page_table, &new_entry->hash_elem);
@@ -114,13 +126,25 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     lock_release (&t->upage_list_lock);
   }
   /* If this mapping is just a modifying of mapping, just modify some entry.
-     This steps is for restore_page. */
-  else
+     This step is for restore_page.
+     This mapping was in swap disk. */
+  else if (old_entry->position == SWAPDISK)
   {
     old_entry->kpage = kpage;
-    old_entry->valid = true;
+    old_entry->position = MEMORY;
   }
-  
+  /* If this mapping is just a modifying of mapping, just modify some entry.
+     This step is for restore_page with lazy loading.
+     This mapping was in file system (more accurately, not mapped yet). */
+  else if (old_entry->position == LAZY)
+  {
+    old_entry->kpage = kpage;
+    old_entry->flags = flags;
+    old_entry->file = file;
+    old_entry->all_zero = all_zero;
+    old_entry->ofs = ofs;
+    old_entry->position = MEMORY;
+  }
   /* Update the frame table, which is necessary for restore_page as well. */
   if (!frame_new_usage (pd, upage, kpage))
   {
@@ -150,11 +174,11 @@ supp_free_all (uint32_t *pd, struct thread *t)
     
     /* If this mapping is in physical memory, free an entry in frame table.
        If this mapping is in swap disk, free an entry in swap table and bitmap. */
-    if (entry->valid)
+    if (entry->position == MEMORY)
     {
       frame_free (entry->kpage);
     }
-    else
+    else if (entry->position == SWAPDISK)
     {
       swap_free (entry->pd, entry->upage);
     }
@@ -210,13 +234,14 @@ restore_page (uint32_t *pd, void *uaddr)
     return false;
   }
   
-  /* If given page is already in frame, it means that
+  /* If given page is already mapped in frame, it means that
      there's an implementation fault. */
-  if (target_entry->valid)
+  if (target_entry->position == MEMORY)
   {
-    printf ("Error: A page fault with a valid page.\n");
+    //printf ("Error: A page fault with a valid page.\n");
     return false;
   }
+  
   /* Obtain a frame. */
   void *kpage = frame_obtain (target_entry->flags);
   if (kpage == NULL)
@@ -225,16 +250,42 @@ restore_page (uint32_t *pd, void *uaddr)
     return false;
   }
   
-  /* Restore the target page in swap disk into the obtained frame. */
-  if (!swap_in (pd, upage, kpage))
+  /* If given page is mapped in swap disk, swap in. */
+  if (target_entry->position == SWAPDISK)
   {
-    printf ("Fail: Swap in.\n");
-    return false;
+    /* Restore the target page in swap disk into the obtained frame. */
+    if (!swap_in (pd, upage, kpage))
+    {
+      printf ("Fail: Swap in.\n");
+      return false;
+    }
+  }
+  /* If given page is mapped in filesys, demand page fault
+     handler to load segment. */
+  else if (target_entry->position == LAZY)
+  {
+    if (target_entry->all_zero)
+    {
+      if (!lazy_load_all_zero (pd, upage, kpage, target_entry->writable,
+                               target_entry->thread))
+        return false;
+      return true;
+    }
+    else
+    {
+      if (!lazy_load_read (pd, upage, kpage, target_entry->writable,
+                           target_entry->thread, target_entry->file,
+                           target_entry->ofs))
+        return false;
+      return true;
+    }
   }
   
   /* Set real mapping, update the supplemental page table,
      and the frame table. */
-  if (!supp_new_mapping (pd, upage, kpage, target_entry->writable, target_entry->thread, target_entry->flags))
+  if (!supp_new_mapping (pd, upage, kpage, target_entry->writable,
+                         target_entry->thread, target_entry->flags,
+                         false, false, NULL, 0))
   {
     printf ("Fail: restore_page with supp_new_mapping.\n");
     return false;

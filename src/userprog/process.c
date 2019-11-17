@@ -654,9 +654,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  lock_acquire (&filesys_lock);
-  file_close (file);
-  lock_release (&filesys_lock);
+  //lock_acquire (&filesys_lock);
+  //file_close (file);
+  //lock_release (&filesys_lock);
   
   return success;
 }
@@ -732,6 +732,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
   
+  struct thread *current_thread = thread_current ();
+  
   lock_acquire (&filesys_lock);
   file_seek (file, ofs);
   lock_release (&filesys_lock);
@@ -743,31 +745,73 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
          and zero the final PAGE_ZERO_BYTES bytes. */
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-      /* Get a page of memory. */
-      uint8_t *kpage = frame_obtain (PAL_USER);
-      if (kpage == NULL)
-        return false;
-
-      /* Load this page. */
-      lock_acquire (&filesys_lock);
-      off_t kpage_read_size = file_read (file, kpage, page_read_bytes);
-      lock_release (&filesys_lock);
       
-      if (kpage_read_size != (int) page_read_bytes)
+      /* If neither page_read_bytes nor page_zero_bytes is 0,
+         do not load lazily.
+         Thus, load that page directly. */
+      if (page_read_bytes != 0 && page_zero_bytes != 0)
+      {
+        /* Get a page of memory. */
+        uint8_t *kpage = frame_obtain (PAL_USER);
+        if (kpage == NULL)
+          return false;
+        
+        /* Load this page. */
+        lock_acquire (&filesys_lock);
+        off_t kpage_read_size = file_read (file, kpage, page_read_bytes);
+        lock_release (&filesys_lock);
+        
+        if (kpage_read_size != (int) page_read_bytes)
         {
           palloc_free_page (kpage);
           return false; 
         }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable, PAL_USER)) 
+        memset (kpage + page_read_bytes, 0, page_zero_bytes);
+        
+        /* Add the page to the process's address space. */
+        if (!install_page (upage, kpage, writable, PAL_USER)) 
+          {
+            palloc_free_page (kpage);
+            return false; 
+          }
+      }
+      /* If either page_read_bytes or page_zero_bytes is 0,
+         load lazily, which means that no frame_obtain is required.
+         The required informations to store differ for two
+         cases. */
+      else
+      {
+        if (page_read_bytes == 0)
         {
-          palloc_free_page (kpage);
-          return false; 
+          /* Because this page will be all zero when
+             loaded after by page fault handler, just
+             store some minimal information. */
+          supp_new_mapping (current_thread->pagedir,
+                            upage, NULL, writable,
+                            current_thread, PAL_USER,
+                            true, true, NULL, 0);
         }
-
+        else
+        {
+          /* Because this page should be filled with
+             read bytes from file, store the needed
+             information to load later. */
+          lock_acquire (&filesys_lock);
+          off_t ofs_now = file_tell (file);
+          lock_release (&filesys_lock);
+          supp_new_mapping (current_thread->pagedir,
+                            upage, NULL, writable,
+                            current_thread, PAL_USER,
+                            true, false, file, ofs_now);
+          /* Because there's no file read in this part,
+             due to the lazy loading, we should update
+             file's position by ourselves. */
+          lock_acquire (&filesys_lock);
+          file_seek (file, ofs_now + PGSIZE);
+          lock_release (&filesys_lock);
+        }
+      }
+      
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
@@ -817,5 +861,7 @@ install_page (void *upage, void *kpage, bool writable, enum palloc_flags flags)
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
-          && supp_new_mapping (t->pagedir, upage, kpage, writable, t, flags));
+          && supp_new_mapping (t->pagedir, upage, kpage,
+                               writable, t, flags,
+                               false, false, NULL, 0));
 }

@@ -416,10 +416,10 @@ is_valid_ptr (void *ptr)
     return false;
   }
   // Check if the given pointer points to mapped section.
-  else if (pagedir_get_page(pd, ptr) == NULL)
+  /*else if (pagedir_get_page(pd, ptr) == NULL)
   {
     return false;
-  }
+  }*/
   else
   {
     return true;
