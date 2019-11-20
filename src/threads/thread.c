@@ -104,6 +104,8 @@ thread_init (void)
   lock_init (&supp_table_lock);
   lock_init (&swap_table_lock);
   lock_init (&swap_bitmap_lock);
+  lock_init (&swap_disk_lock);
+  sema_init (&page_evict_sema, 1);
   
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();

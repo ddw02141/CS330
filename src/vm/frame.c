@@ -41,7 +41,6 @@ void
 frame_free (void *kpage)
 {
   /* Find the frame_entry with given kpage. */
-  lock_acquire (&frame_table_lock);
   struct frame_entry *target_entry = frame_entry_lookup (kpage);
   
   /* If the target frame does not exist, return. */
@@ -51,6 +50,7 @@ frame_free (void *kpage)
   /* Delete the frame_entry from the frame table,
      make the flag PTE_P of pte 0,
      and free the allocated memory for that entry. */
+  lock_acquire (&frame_table_lock);
   hash_delete (&frame_table, &target_entry->hash_elem);
   lock_release (&frame_table_lock);
   free (target_entry);
@@ -64,7 +64,9 @@ frame_entry_lookup (void *kpage)
   struct hash_elem *e;
   
   entry.kpage = kpage;
+  lock_acquire (&frame_table_lock);
   e = hash_find (&frame_table, &entry.hash_elem);
+  lock_release (&frame_table_lock);
   return e != NULL ? hash_entry (e, struct frame_entry, hash_elem) : NULL;
 }
 
@@ -83,9 +85,10 @@ frame_find_victim (void)
   {
     struct frame_entry *entry = hash_entry (hash_cur (&i), struct frame_entry, hash_elem);
     
-    if (pagedir_is_accessed (entry->pd, entry->upage))
+    if (pagedir_is_accessed (entry->pd, entry->upage) || pagedir_is_accessed (entry->pd, entry->kpage))
     {
       pagedir_set_accessed (entry->pd, entry->upage, false);
+      pagedir_set_accessed (entry->pd, entry->kpage, false);
     }
     else
     {
@@ -93,6 +96,7 @@ frame_find_victim (void)
       return entry;
     }
   }
+  lock_release (&frame_table_lock);
   
   /*If finding a victim fails during one interation, iterate once again.
     In second interation, it is certain that there's a victim. */
@@ -102,9 +106,10 @@ frame_find_victim (void)
   {
     struct frame_entry *entry = hash_entry (hash_cur (&i), struct frame_entry, hash_elem);
     
-    if (pagedir_is_accessed (entry->pd, entry->upage))
+    if (pagedir_is_accessed (entry->pd, entry->upage) || pagedir_is_accessed (entry->pd, entry->kpage))
     {
       pagedir_set_accessed (entry->pd, entry->upage, false);
+      pagedir_set_accessed (entry->pd, entry->kpage, false);
     }
     else
     {
@@ -112,10 +117,10 @@ frame_find_victim (void)
       return entry;
     }
   }
+  lock_release (&frame_table_lock);
+  printf("Fatal: find victim - program cannot reach here");
+  return NULL;
 }
-
-//void *
-//frame
 
 /* A hash function used for frame_table.
    A physical address which is address of a frame used by a user page

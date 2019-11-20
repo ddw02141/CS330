@@ -17,6 +17,9 @@ struct frame_entry
 /* A lock used to synchronize accesses to the frame table. */
 struct lock frame_table_lock;
 
+/* A semaphore used as mutex of page eviction. */
+struct semaphore page_evict_sema;
+
 /* Function prototypes. */
 bool frame_new_usage (uint32_t *pd, void *upage, void *kpage);
 void frame_free (void *kpage);

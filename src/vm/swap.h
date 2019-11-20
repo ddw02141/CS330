@@ -30,6 +30,9 @@ struct lock swap_table_lock;
 /* A lock used to synchronize accesses to the swap bitmap. */
 struct lock swap_bitmap_lock;
 
+/* A lock used to synchronize accesses to the swap disk. */
+struct lock swap_disk_lock;
+
 /* Function prototypes. */
 void swap_init (void);
 bool swap_out (uint32_t *pd, void *upage, void *kpage);

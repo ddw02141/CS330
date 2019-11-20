@@ -28,14 +28,16 @@ swap_out (uint32_t *pd, void *upage, void *kpage)
 {
   /* Get 8 consecutive free sectors in swap disk. */
   lock_acquire (&swap_bitmap_lock);
-  size_t idx = bitmap_scan_and_flip (&swap_bitmap, 0, 8, false);
+  size_t idx = bitmap_scan_and_flip (swap_bitmap, 0, 8, false);
   lock_release (&swap_bitmap_lock);
   
   if (idx == BITMAP_ERROR)
     return false;
   
   /* Write to the swap disk. */
+  lock_acquire (&swap_disk_lock);
   swap_disk_write (idx, kpage);
+  lock_release (&swap_disk_lock);
   
   /* Construct a swap table entry. */
   struct swap_table_entry *entry = malloc (sizeof (struct swap_table_entry));
@@ -71,7 +73,9 @@ swap_in (uint32_t *pd, void *upage, void *kpage)
   }
   
   /* Read the contents of the given upage into kpage. */
+  lock_acquire (&swap_disk_lock);
   swap_disk_read (target_entry->bitmap_idx, kpage);
+  lock_release (&swap_disk_lock);
   
   /* Update the swap disk related data structures. */
   swap_free (pd, upage);
@@ -90,7 +94,7 @@ swap_free (uint32_t *pd, void *upage)
   /* Update the swap bitmap.
      And do not initialize the actual swap disk. */
   lock_acquire (&swap_bitmap_lock);
-  bitmap_set_multiple (&swap_bitmap, target_entry->bitmap_idx, 8, false);
+  bitmap_set_multiple (swap_bitmap, target_entry->bitmap_idx, 8, false);
   lock_release (&swap_bitmap_lock);
   
   /* Remove the entry from the swap table,

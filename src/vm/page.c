@@ -51,11 +51,11 @@ frame_obtain (enum palloc_flags flags)
     
     /* Clear the victim page, update the frame table, and free the entry. */
     pagedir_clear_page (victim->pd, victim->upage);
-    frame_free (victim->kpage);
     palloc_free_page (victim->kpage);
+    frame_free (victim->kpage);
     
     /* Obtain frame once again. */
-    void *kpage = palloc_get_page (flags);
+    kpage = palloc_get_page (flags);
     if (kpage == NULL)
     {
       printf ("Frame obtain: Failed.\n");
@@ -111,6 +111,7 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
       new_entry->position = LAZY;
     else
       new_entry->position = MEMORY;
+    
     /* Update the supplemental page table. */
     lock_acquire (&supp_table_lock);
     hash_insert (&supp_page_table, &new_entry->hash_elem);
@@ -145,11 +146,15 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     old_entry->ofs = ofs;
     old_entry->position = MEMORY;
   }
-  /* Update the frame table, which is necessary for restore_page as well. */
-  if (!frame_new_usage (pd, upage, kpage))
+  /* Update the frame table, which is necessary for restore_page as well.
+     Lazy loading should skip this step. */
+  if (!lazy)
   {
-    printf ("Fail: supp new mapping with frame new usage.\n");
-    return false;
+    if (!frame_new_usage (pd, upage, kpage))
+    {
+      printf ("Fail: supp new mapping with frame new usage.\n");
+      return false;
+    }
   }
   return true;
 }
@@ -206,7 +211,6 @@ void
 supp_free_mapping (uint32_t *pd, void *upage)
 {
   /* Find the supplemental page table entry. */
-  lock_acquire (&supp_table_lock);
   struct supp_table_entry *target_entry = supp_table_entry_lookup (pd, upage);
   
   /* If the target mapping does not exist in supplemental page table, return. */
@@ -215,6 +219,7 @@ supp_free_mapping (uint32_t *pd, void *upage)
   
   /* Delete the mapping from the supplementary page table,
      and free the allocated memory for that entry. */
+  lock_acquire (&supp_table_lock);
   hash_delete (&supp_page_table, &target_entry->hash_elem);
   lock_release (&supp_table_lock);
   free (target_entry);
@@ -256,6 +261,7 @@ restore_page (uint32_t *pd, void *uaddr)
     /* Restore the target page in swap disk into the obtained frame. */
     if (!swap_in (pd, upage, kpage))
     {
+      palloc_free_page (kpage);
       printf ("Fail: Swap in.\n");
       return false;
     }
@@ -268,7 +274,10 @@ restore_page (uint32_t *pd, void *uaddr)
     {
       if (!lazy_load_all_zero (pd, upage, kpage, target_entry->writable,
                                target_entry->thread))
+      {
+        palloc_free_page (kpage);
         return false;
+      }
       return true;
     }
     else
@@ -276,9 +285,20 @@ restore_page (uint32_t *pd, void *uaddr)
       if (!lazy_load_read (pd, upage, kpage, target_entry->writable,
                            target_entry->thread, target_entry->file,
                            target_entry->ofs))
+      {
+        palloc_free_page (kpage);
         return false;
+      }
       return true;
     }
+  }
+  /* If given page is already mapped in frame, it means that
+     there's an implementation fault. */
+  else
+  {
+    //printf ("Error: A page fault with a valid page.\n");
+    palloc_free_page (kpage);
+    return false;
   }
   
   /* Set real mapping, update the supplemental page table,
@@ -288,6 +308,7 @@ restore_page (uint32_t *pd, void *uaddr)
                          false, false, NULL, 0))
   {
     printf ("Fail: restore_page with supp_new_mapping.\n");
+    palloc_free_page (kpage);
     return false;
   }
   return true;
@@ -302,7 +323,9 @@ supp_table_entry_lookup (uint32_t *pd, void *upage)
   
   entry.pd = pd;
   entry.upage = upage;
+  lock_acquire (&supp_table_lock);
   e = hash_find (&supp_page_table, &entry.hash_elem);
+  lock_release (&supp_table_lock);
   return e != NULL ? hash_entry (e, struct supp_table_entry, hash_elem) : NULL;
 }
 

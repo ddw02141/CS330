@@ -6,6 +6,7 @@
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include "userprog/syscall.h"
+#include "vm/frame.h"
 #include "vm/page.h"
 #include "filesys/off_t.h"
 #include "filesys/file.h"
@@ -178,12 +179,14 @@ page_fault (struct intr_frame *f)
   
   /* If this fault is occured by lazy loading,
      or by swapping, load now. */
+  sema_down (&page_evict_sema);
   if (restore_page (t->pagedir, fault_addr))
-    return;
-  
+  {  sema_up (&page_evict_sema);
+    return;}
+  sema_up (&page_evict_sema);
   /* Stack cannot grow at most 8MB. */
-  if (fault_page < SG_LIMIT)
-    error_exit ();
+  //if (fault_page < SG_LIMIT)
+  //  error_exit ();
   
   /* If esp exceeds the current stack_bound, grow the stack.
      Demanding of stack growth exceeding limit is detected
@@ -226,6 +229,7 @@ lazy_load_all_zero (uint32_t *pd, void *upage, void *kpage, bool writable, struc
     printf ("Fail: Lazy load all zero with supp new mapping.\n");
     return false;
   }
+  memset (kpage, 0, PGSIZE);
   return true;
 }
 
