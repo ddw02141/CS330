@@ -38,17 +38,34 @@ frame_obtain (enum palloc_flags flags)
     /* Get a victim page which is mapped in frame. */
     struct frame_entry *victim = frame_find_victim ();
     
-    /* Store the whole victim page into the swap disk. */
-    if (!swap_out (victim->pd, victim->upage, victim->kpage))
-    {
-      printf ("Frame obtain: swap failed.\n");
-      return NULL;
-    }
-    
-    /* Update the supplemental page table. */
+    /* If the victim is mmapped page, do not swap out but
+       write back to file and free page. */
     struct supp_table_entry *entry = supp_table_entry_lookup (victim->pd, victim->upage);
-    entry->kpage = NULL;
-    entry->position = SWAPDISK;
+    if (entry->initial_mode == MODE_MMAP)
+    {
+      if (!write_back (entry))
+      {
+        printf ("Frame obtain: write failed.\n");
+        return NULL;
+      }
+      
+      /* Update the supplemental page table. */
+      entry->kpage = NULL;
+      entry->position = MMAP;
+    }
+    else
+    {
+      /* Store the whole victim page into the swap disk. */
+      if (!swap_out (victim->pd, victim->upage, victim->kpage))
+      {
+        printf ("Frame obtain: swap failed.\n");
+        return NULL;
+      }
+    
+      /* Update the supplemental page table. */
+      entry->kpage = NULL;
+      entry->position = SWAPDISK;
+    }
     
     /* Clear the victim page, update the frame table, and free the entry. */
     pagedir_clear_page (victim->pd, victim->upage);
@@ -71,7 +88,7 @@ frame_obtain (enum palloc_flags flags)
    If the addition of mapping is succeed, update supplemental page table,
    and the frame table. */
 bool
-supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags flags, enum mapping_mode mode, bool zero, struct file *file, off_t ofs)
+supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, enum palloc_flags flags, enum mapping_mode mode, bool zero, struct file *file, off_t ofs, off_t ofs_eof, mapid_t mapid)
 {
   /* Add a mapping from upage which is a virtual address
      to frame which is a physical address of the corresponding frame.
@@ -105,9 +122,11 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     new_entry->writable = writable;
     new_entry->thread = t;
     new_entry->flags = flags;
+    new_entry->initial_mode = mode;
     new_entry->zero = zero;
     new_entry->file = file;
     new_entry->ofs = ofs;
+    new_entry->ofs_eof = ofs_eof;
     if (mode == MODE_LAZY)
       new_entry->position = LAZY;
     else if (mode == MODE_MMAP)
@@ -123,6 +142,7 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     /* Construct a upage list entry. */
     struct upage_list_entry *new_upage = malloc (sizeof (struct upage_list_entry));
     new_upage->upage = upage;
+    new_upage->mapid = mapid;
     
     /* Update the upage list of the given thread. */
     lock_acquire (&t->upage_list_lock);
@@ -130,32 +150,10 @@ supp_new_mapping (uint32_t *pd, void *upage, void *kpage, bool writable, struct 
     lock_release (&t->upage_list_lock);
   }
   /* If this mapping is just a modifying of mapping, just modify some entry.
-     This step is for restore_page.
-     This mapping was in swap disk. */
-  else if (old_entry->position == SWAPDISK)
+     This step is for restore_page. */
+  else
   {
     old_entry->kpage = kpage;
-    old_entry->position = MEMORY;
-  }
-  /* If this mapping is just a modifying of mapping, just modify some entry.
-     This step is for restore_page with lazy loading.
-     This mapping was in file system (more accurately, not mapped yet). */
-  else if (old_entry->position == LAZY)
-  {
-    old_entry->kpage = kpage;
-    old_entry->flags = flags;
-    old_entry->file = file;
-    old_entry->zero = zero;
-    old_entry->ofs = ofs;
-    old_entry->position = MEMORY;
-  }
-  else if (old_entry->position == MMAP)
-  {
-    old_entry->kpage = kpage;
-    old_entry->flags = flags;
-    old_entry->file = file;
-    old_entry->zero = zero;
-    old_entry->ofs = ofs;
     old_entry->position = MEMORY;
   }
   
@@ -308,9 +306,8 @@ restore_page (uint32_t *pd, void *uaddr)
   /* If given page is mapped in filesys because of Mmap, add mapping. */
   else if (target_entry->position == MMAP)
   {
-    if (!lazy_load_read (pd, upage, kpage, target_entry->writable,
-                         target_entry->thread, target_entry->file,
-                         target_entry->ofs))
+    if (!lazy_mmap (pd, upage, kpage, target_entry->thread, target_entry->file,
+                    target_entry->ofs, target_entry->zero))
     {
       palloc_free_page (kpage);
       return false;
@@ -330,7 +327,7 @@ restore_page (uint32_t *pd, void *uaddr)
      and the frame table. */
   if (!supp_new_mapping (pd, upage, kpage, target_entry->writable,
                          target_entry->thread, target_entry->flags,
-                         MODE_MEMORY, false, NULL, 0))
+                         MODE_MEMORY, false, NULL, 0, 0, 0))
   {
     printf ("Fail: restore_page with supp_new_mapping.\n");
     palloc_free_page (kpage);
@@ -342,7 +339,7 @@ restore_page (uint32_t *pd, void *uaddr)
 /* Add a new mmap.
    Split the given file into pages, and call supp_new_mapping. */
 bool
-supp_new_mmap (uint32_t *pd, void *upage, struct thread *t, struct file *file)
+supp_new_mmap (uint32_t *pd, void *upage, struct thread *t, struct file *file, mapid_t mapid)
 {
   lock_acquire (&filesys_lock);
   off_t file_size = file_length (file);
@@ -356,7 +353,8 @@ supp_new_mmap (uint32_t *pd, void *upage, struct thread *t, struct file *file)
        parameter 'zero' of supp_new_mapping is false. */
     if (file_size >= PGSIZE)
     {
-      if (!supp_new_mapping (pd, page, NULL, true, t, PAL_USER, MODE_MMAP, false, file, ofs))
+      if (!supp_new_mapping (pd, page, NULL, true, t, PAL_USER, MODE_MMAP,
+                             false, file, ofs, 0, mapid))
       {
         printf ("Fail: supp_new_mmap with supp_new_mapping.\n");
         return false;
@@ -370,7 +368,8 @@ supp_new_mmap (uint32_t *pd, void *upage, struct thread *t, struct file *file)
        If the control comes in here, this must be the last iteration. */
     else
     {
-      if (!supp_new_mapping (pd, page, NULL, true, t, PAL_USER, MODE_MMAP, true, file, ofs))
+      if (!supp_new_mapping (pd, page, NULL, true, t, PAL_USER, MODE_MMAP,
+                             true, file, ofs, file_size, mapid))
       {
         printf ("Fail: supp_new_mmap with supp_new_mapping.\n");
         return false;
@@ -383,13 +382,57 @@ supp_new_mmap (uint32_t *pd, void *upage, struct thread *t, struct file *file)
   return true;
 }
 
+/* Free a mmapped memory, after write the contents back into the file.
+   If a page contains zero paddings, discard them. */
+void
+supp_munmap (uint32_t *pd, void *upage)
+{
+  struct supp_table_entry *target_entry = supp_table_entry_lookup (pd, upage);
+  
+  if (write_back (target_entry))
+  {
+    frame_free (target_entry->kpage);
+    palloc_free_page (target_entry->kpage);
+    supp_free_mapping (target_entry->pd, target_entry->upage);
+    pagedir_clear_page (pd, upage);
+  }
+}
+
+/* Write back a mmapped memory to the file. */
+bool
+write_back (struct supp_table_entry *entry)
+{
+  /* If a mmapped memory is evicted, it is written to file.
+     Thus mmapped memory is not swapped out to the swap disk. */
+  if (entry->position == MEMORY)
+  {
+    lock_acquire (&filesys_lock);
+    if (entry->zero)
+    {
+      /* Write to file with discarding 0s. */
+      off_t write_size = entry->ofs_eof - entry->ofs;
+      file_write_at (entry->file, entry->kpage, write_size, entry->ofs);
+    }
+    else
+    {
+      file_write_at (entry->file, entry->kpage, PGSIZE, entry->ofs);
+    }
+    lock_release (&filesys_lock);
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
 /* Load a page filled with zeros.
    The page should be loaded when it is actually needed. */
 bool
 lazy_load_all_zero (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t)
 {
   if (!supp_new_mapping (pd, upage, kpage, writable, t, PAL_USER | PAL_ZERO, MODE_MEMORY,
-                         false, NULL, 0))
+                         false, NULL, 0, 0, -1))
   {
     printf ("Fail: Lazy load all zero with supp new mapping.\n");
     return false;
@@ -404,7 +447,7 @@ bool
 lazy_load_read (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, struct file *file, off_t ofs)
 {
   if (!supp_new_mapping (pd, upage, kpage, writable, t, PAL_USER, MODE_MEMORY,
-                         false, NULL, 0))
+                         false, NULL, 0, 0, -1))
   {
     printf ("Fail: Lazy load read with supp new mapping.\n");
     return false;
@@ -421,9 +464,32 @@ lazy_load_read (uint32_t *pd, void *upage, void *kpage, bool writable, struct th
 }
 
 bool
-lazy_mmap (uint32_t *pd, void *upage, void *kpage, struct thread *t, struct file *file, off_t ofs)
+lazy_mmap (uint32_t *pd, void *upage, void *kpage, struct thread *t, struct file *file, off_t ofs, bool zero)
 {
+  if (!supp_new_mapping (pd, upage, kpage, true, t, PAL_USER, MODE_MEMORY,
+                         false, NULL, 0, 0, 0))
+  {
+    printf ("Fail: Lazy mmap with supp new mapping.\n");
+    return false;
+  }
   
+  lock_acquire (&filesys_lock);
+  file_seek (file, ofs);
+  off_t kpage_read_size = file_read (file, kpage, PGSIZE);
+  lock_release (&filesys_lock);
+  
+  if (zero)
+  {
+    off_t kpage_zero_size = PGSIZE - kpage_read_size;
+    memset (kpage + kpage_read_size, 0, kpage_zero_size);
+    return true;
+  }
+  else
+  {
+    if (kpage_read_size != PGSIZE)
+      return false;
+    return true;
+  }
 }
 
 /* Find a supplemental table entry corresponding to given user page address. */

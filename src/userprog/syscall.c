@@ -26,6 +26,7 @@ static struct file *find_file_by_fd (int fd);
 static bool find_exec_by_name (char *file_name);
 static void append_exit_list (struct exited_thread *t, int exit_status);
 static bool is_page_overlap (void *addr, off_t file_size);
+static void munmap_pages (mapid_t mapid);
 
 void
 syscall_init (void) 
@@ -466,7 +467,8 @@ syscall_handler (struct intr_frame *f)
     /* Mmapped file should be loaded lazily, which is handled by
        supplemental page table. For here, in system call, just
        call supp_new_mapping. */
-    if (!supp_new_mmap (current_thread->pagedir, addr, current_thread, file))
+    if (!supp_new_mmap (current_thread->pagedir, addr, current_thread,
+                        new_file, new_file->fd))
     {
       f->eax = -1;
       return;
@@ -482,7 +484,7 @@ syscall_handler (struct intr_frame *f)
   {
     mapid_t mapid = *((mapid_t *) arg1);
     
-    
+    munmap_pages (mapid);
   }
   else
   {
@@ -686,4 +688,30 @@ is_page_overlap (void *addr, off_t file_size)
     page += PGSIZE;
   }
   return false;
+}
+
+static void
+munmap_pages (mapid_t mapid)
+{
+  struct thread *current_thread = thread_current ();
+  struct list_elem *e;
+  
+  lock_acquire (&current_thread->upage_list_lock);
+  e = list_begin (&current_thread->upage_list);
+  while (e != list_end (&current_thread->upage_list))
+  {
+    struct upage_list_entry *entry = list_entry (e, struct upage_list_entry, elem);
+    if (entry->mapid == mapid)
+    {
+      supp_munmap (current_thread->pagedir, entry->upage);
+      e = list_remove (e);
+      free (entry);
+    }
+    else
+    {
+      e = list_next (e);
+      free (entry);
+    }
+  }
+  lock_release (&current_thread->upage_list_lock);
 }

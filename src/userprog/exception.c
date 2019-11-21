@@ -206,7 +206,7 @@ page_fault (struct intr_frame *f)
         error_exit ();
       }
       if (!supp_new_mapping (t->pagedir, upage, kpage, true, t, PAL_USER | PAL_ZERO,
-                             MODE_MEMORY, false, NULL, 0))
+                             MODE_MEMORY, false, NULL, 0, 0, -1))
       {
         printf ("Fail: Stack growth with supp_new_mapping.\n");
         error_exit ();
