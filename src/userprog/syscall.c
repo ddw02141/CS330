@@ -13,6 +13,7 @@
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "threads/malloc.h"
+#include "vm/page.h"
 
 /* Function prototypes. */
 static void syscall_handler (struct intr_frame *);
@@ -24,6 +25,7 @@ static struct file *find_file_by_name (char *file_name);
 static struct file *find_file_by_fd (int fd);
 static bool find_exec_by_name (char *file_name);
 static void append_exit_list (struct exited_thread *t, int exit_status);
+static bool is_page_overlap (void *addr, off_t file_size);
 
 void
 syscall_init (void) 
@@ -51,10 +53,18 @@ syscall_handler (struct intr_frame *f)
   void *arg3 = (void *)(f->esp + 12);
   
   /* Handle the syscall with given syscall number. */
+  
+  /**************************
+   *       SYS_HALT         *
+   *************************/
   if (syscall_num == SYS_HALT)
   {
     shutdown_power_off ();
   }
+  
+  /**************************
+   *       SYS_EXIT         *
+   *************************/
   else if (syscall_num == SYS_EXIT)
   {
     struct thread *current_thread = thread_current ();
@@ -97,6 +107,10 @@ syscall_handler (struct intr_frame *f)
       thread_exit ();
     }
   }
+  
+  /**************************
+   *       SYS_EXEC         *
+   *************************/
   else if (syscall_num == SYS_EXEC)
   {
     // Check if the argument lies in valid address.
@@ -136,11 +150,19 @@ syscall_handler (struct intr_frame *f)
       }
     }
   }
+  
+  /**************************
+   *       SYS_WAIT         *
+   *************************/
   else if (syscall_num == SYS_WAIT)
   {
     tid_t tid = *((tid_t *) arg1);
     f->eax = process_wait (tid);
-  }  
+  }
+  
+  /**************************
+   *      SYS_CREATE        *
+   *************************/
   else if (syscall_num == SYS_CREATE)
   {
     char *file_name = *((char **) arg1);
@@ -158,6 +180,10 @@ syscall_handler (struct intr_frame *f)
       lock_release (&filesys_lock);
     }
   }
+  
+  /**************************
+   *      SYS_REMOVE        *
+   *************************/
   else if (syscall_num == SYS_REMOVE)
   {
     char *file_name = *((char **) arg1);
@@ -166,6 +192,10 @@ syscall_handler (struct intr_frame *f)
     f->eax = filesys_remove(file_name);
     lock_release (&filesys_lock);
   }
+  
+  /**************************
+   *       SYS_OPEN         *
+   *************************/
   else if (syscall_num == SYS_OPEN)
   {
     char *file_name = *((char **) arg1);
@@ -195,9 +225,11 @@ syscall_handler (struct intr_frame *f)
         {
           new_file->fd = current_thread->max_fd;
           new_file->file_name = file_name;
+          lock_acquire (&current_thread->file_list_lock);
           list_push_back (&current_thread->file_list,
                           &new_file->elem);
           current_thread->max_fd += 1;
+          lock_release (&current_thread->file_list_lock);
           f->eax = new_file->fd;
         }
       }
@@ -207,14 +239,20 @@ syscall_handler (struct intr_frame *f)
         new_file = file_reopen (file);
         new_file->fd = current_thread->max_fd;
         new_file->file_name = file_name;
+        lock_acquire (&current_thread->file_list_lock);
         list_push_back (&current_thread->file_list,
                         &new_file->elem);
+        lock_release (&current_thread->file_list_lock);
         current_thread->max_fd += 1;
         f->eax = new_file->fd;
       }
       lock_release (&filesys_lock);
     }
   }
+  
+  /**************************
+   *     SYS_FILESIZE       *
+   *************************/
   else if (syscall_num == SYS_FILESIZE)
   {
     int fd = *((int *) arg1);
@@ -232,6 +270,10 @@ syscall_handler (struct intr_frame *f)
     }
     lock_release (&filesys_lock);
   }
+  
+  /**************************
+   *       SYS_READ         *
+   *************************/
   else if (syscall_num == SYS_READ)
   {
     int fd = *((int *) arg1);
@@ -262,6 +304,10 @@ syscall_handler (struct intr_frame *f)
     }
     lock_release (&filesys_lock);
   }
+  
+  /**************************
+   *       SYS_WRITE        *
+   *************************/
   else if (syscall_num == SYS_WRITE)
   {
     int fd = *((int *) arg1);
@@ -301,6 +347,10 @@ syscall_handler (struct intr_frame *f)
     }
     lock_release (&filesys_lock);
   }
+  
+  /**************************
+   *       SYS_SEEK         *
+   *************************/
   else if (syscall_num == SYS_SEEK)
   {
     int fd = *((int *) arg1);
@@ -310,8 +360,12 @@ syscall_handler (struct intr_frame *f)
     if (file != NULL)
       file_seek (file, pos);
   }
+  
+  /**************************
+   *       SYS_TELL         *
+   *************************/
   else if (syscall_num == SYS_TELL)
-  {
+{
     int fd = *((int *) arg1);
     
     struct file *file = find_file_by_fd (fd);
@@ -320,6 +374,10 @@ syscall_handler (struct intr_frame *f)
     else
       f->eax = -1;
   }
+  
+  /**************************
+   *       SYS_CLOSE        *
+   *************************/
   else if (syscall_num == SYS_CLOSE)
   {
     int fd = *((int *) arg1);
@@ -338,7 +396,96 @@ syscall_handler (struct intr_frame *f)
       lock_release (&filesys_lock);
     }
   }
-  else{
+  
+  /**************************
+   *       SYS_MMAP         *
+   *************************/
+  else if (syscall_num == SYS_MMAP)
+  {
+    int fd = *((int *) arg1);
+    void *addr = *((void **) arg2);
+    struct thread *current_thread = thread_current ();
+    
+    /* If fd is 0 or 1, which are not mappable file, fail. */
+    if (fd == 0 || fd == 1)
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    /* If addr is 0, fail. */
+    if (addr == 0)
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    /* If addr is not page-aligned, fail. */
+    if (pg_ofs (addr) != 0)
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    struct file *file = find_file_by_fd (fd);
+    /* If there's no file with given fd, fail. */
+    if (file == NULL)
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    /* Reopen the file for an independent reference. */
+    lock_acquire (&filesys_lock);
+    struct file *new_file = file_reopen (file);
+    lock_release (&filesys_lock);
+    new_file->fd = current_thread->max_fd;
+    lock_acquire (&current_thread->file_list_lock);
+    list_push_back (&current_thread->file_list, &new_file->elem);
+    current_thread->max_fd += 1;
+    lock_release (&current_thread->file_list_lock);
+    
+    /* If target file has length 0, fail. */
+    lock_acquire (&filesys_lock);
+    off_t file_size = file_length (new_file);
+    lock_release (&filesys_lock);
+    if (file_size == 0)
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    /* If the range of pages needed to map the file from addr overlaps
+       any already mapped page, fail. */
+    if (is_page_overlap (addr, file_size))
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    /* Mmapped file should be loaded lazily, which is handled by
+       supplemental page table. For here, in system call, just
+       call supp_new_mapping. */
+    if (!supp_new_mmap (current_thread->pagedir, addr, current_thread, file))
+    {
+      f->eax = -1;
+      return;
+    }
+    
+    f->eax = new_file->fd;
+  }
+  
+  /**************************
+   *      SYS_MUNMAP        *
+   *************************/
+  else if (syscall_num == SYS_MUNMAP)
+  {
+    mapid_t mapid = *((mapid_t *) arg1);
+    
+    
+  }
+  else
+  {
     ;
   }
 }
@@ -522,4 +669,21 @@ append_exit_list (struct exited_thread *t, int exit_status)
   t->exit_status = exit_status;
   t->parent_tid = current_thread->parent->tid;
   list_push_back (&exit_list, &t->elem);
+}
+
+static bool
+is_page_overlap (void *addr, off_t file_size)
+{
+  struct thread *current_thread = thread_current ();
+  void *page_start = addr;
+  void *page_end = pg_round_down (addr + file_size);
+  
+  void *page = page_start;
+  while (page <= page_end)
+  {
+    if (lookup_page (current_thread->pagedir, page, false) != NULL)
+      return true;
+    page += PGSIZE;
+  }
+  return false;
 }

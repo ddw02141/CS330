@@ -4,6 +4,8 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
+typedef int mapid_t;
+
 /* Lock for synchronization of file system. */
 struct lock filesys_lock;
 

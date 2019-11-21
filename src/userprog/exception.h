@@ -16,6 +16,4 @@
 
 void exception_init (void);
 void exception_print_stats (void);
-bool lazy_load_all_zero (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t);
-bool lazy_load_read (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, struct file *file, off_t ofs);
 #endif /* userprog/exception.h */

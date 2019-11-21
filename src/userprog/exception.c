@@ -6,10 +6,8 @@
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include "userprog/syscall.h"
-#include "vm/frame.h"
 #include "vm/page.h"
-#include "filesys/off_t.h"
-#include "filesys/file.h"
+#include "vm/frame.h"
 #include "userprog/exception.h"
 
 /* Number of page faults processed. */
@@ -181,12 +179,14 @@ page_fault (struct intr_frame *f)
      or by swapping, load now. */
   sema_down (&page_evict_sema);
   if (restore_page (t->pagedir, fault_addr))
-  {  sema_up (&page_evict_sema);
-    return;}
+  {
+    sema_up (&page_evict_sema);
+    return;
+  }
   sema_up (&page_evict_sema);
   /* Stack cannot grow at most 8MB. */
-  //if (fault_page < SG_LIMIT)
-  //  error_exit ();
+  if (fault_page < SG_LIMIT)
+    error_exit ();
   
   /* If esp exceeds the current stack_bound, grow the stack.
      Demanding of stack growth exceeding limit is detected
@@ -205,7 +205,8 @@ page_fault (struct intr_frame *f)
         printf ("Fail: Stack growth with frame obtain.\n");
         error_exit ();
       }
-      if (!supp_new_mapping (t->pagedir, upage, kpage, true, t, PAL_USER | PAL_ZERO, false, false, NULL, 0))
+      if (!supp_new_mapping (t->pagedir, upage, kpage, true, t, PAL_USER | PAL_ZERO,
+                             MODE_MEMORY, false, NULL, 0))
       {
         printf ("Fail: Stack growth with supp_new_mapping.\n");
         error_exit ();
@@ -218,37 +219,4 @@ page_fault (struct intr_frame *f)
   
   //printf ("Fail: Page fault with unknown reason.\n");
   error_exit ();
-}
-
-bool
-lazy_load_all_zero (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t)
-{
-  if (!supp_new_mapping (pd, upage, kpage, writable, t, PAL_USER | PAL_ZERO, false,
-                         false, NULL, 0))
-  {
-    printf ("Fail: Lazy load all zero with supp new mapping.\n");
-    return false;
-  }
-  memset (kpage, 0, PGSIZE);
-  return true;
-}
-
-bool
-lazy_load_read (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, struct file *file, off_t ofs)
-{
-  if (!supp_new_mapping (pd, upage, kpage, writable, t, PAL_USER, false,
-                         false, NULL, 0))
-  {
-    printf ("Fail: Lazy load read with supp new mapping.\n");
-    return false;
-  }
-  
-  lock_acquire (&filesys_lock);
-  file_seek (file, ofs);
-  off_t kpage_read_size = file_read (file, kpage, PGSIZE);
-  lock_release (&filesys_lock);
-  
-  if (kpage_read_size != PGSIZE)
-    error_exit ();
-  return true;
 }

@@ -789,7 +789,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           supp_new_mapping (current_thread->pagedir,
                             upage, NULL, writable,
                             current_thread, PAL_USER,
-                            true, true, NULL, 0);
+                            MODE_LAZY, true, NULL, 0);
         }
         else
         {
@@ -802,7 +802,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           supp_new_mapping (current_thread->pagedir,
                             upage, NULL, writable,
                             current_thread, PAL_USER,
-                            true, false, file, ofs_now);
+                            MODE_LAZY, false, file, ofs_now);
           /* Because there's no file read in this part,
              due to the lazy loading, we should update
              file's position by ourselves. */
@@ -863,5 +863,5 @@ install_page (void *upage, void *kpage, bool writable, enum palloc_flags flags)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && supp_new_mapping (t->pagedir, upage, kpage,
                                writable, t, flags,
-                               false, false, NULL, 0));
+                               MODE_MEMORY, false, NULL, 0));
 }
