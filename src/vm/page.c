@@ -396,6 +396,10 @@ supp_munmap (uint32_t *pd, void *upage)
     supp_free_mapping (target_entry->pd, target_entry->upage);
     pagedir_clear_page (pd, upage);
   }
+  else
+  {
+    supp_free_mapping (target_entry->pd, target_entry->upage);
+  }
 }
 
 /* Write back a mmapped memory to the file. */
@@ -406,6 +410,9 @@ write_back (struct supp_table_entry *entry)
      Thus mmapped memory is not swapped out to the swap disk. */
   if (entry->position == MEMORY)
   {
+    if (!pagedir_is_dirty (entry->pd, entry->upage))
+      return false;
+    
     lock_acquire (&filesys_lock);
     if (entry->zero)
     {

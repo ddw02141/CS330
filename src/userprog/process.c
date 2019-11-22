@@ -254,6 +254,11 @@ process_exit (void)
   }
   lock_release (&cur->parent->child_list_lock);
   
+  /************************************************/
+  
+  /* Munmap all before file_all_close. */
+  munmap_all (cur);
+  
   /* Close all the opened file by this thread.
      First check if the current thread is  already
      holding filesys lock. It is possible if this
@@ -261,6 +266,8 @@ process_exit (void)
   if (lock_held_by_current_thread (&filesys_lock))
     lock_release (&filesys_lock);
   file_all_close ();
+  
+  /************************************************/
   
   /*************************************************/
   /* This thread is a parent thread of one thread. */
@@ -274,6 +281,8 @@ process_exit (void)
   lock_release (&cur->child_list_lock);
   
   /************************************************/
+  
+  /************************************************/
   /* This thread is a child thread of one thread. */
   /************************************************/
   
@@ -284,6 +293,7 @@ process_exit (void)
   /* If a exec fails to load, wake up its parent. */
   sema_up (&parent->exec_sema);
   
+  /************************************************/
   
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

@@ -1,4 +1,3 @@
-#include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
@@ -12,6 +11,7 @@
 #include "userprog/pagedir.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
 
@@ -26,7 +26,8 @@ static struct file *find_file_by_fd (int fd);
 static bool find_exec_by_name (char *file_name);
 static void append_exit_list (struct exited_thread *t, int exit_status);
 static bool is_page_overlap (void *addr, off_t file_size);
-static void munmap_pages (mapid_t mapid);
+static void remove_mapid_list (mapid_t mapid);
+static void append_mapid_list (mapid_t mapid);
 
 void
 syscall_init (void) 
@@ -237,15 +238,23 @@ syscall_handler (struct intr_frame *f)
       // This file is already opened by this thread.
       else
       {
-        new_file = file_reopen (file);
-        new_file->fd = current_thread->max_fd;
-        new_file->file_name = file_name;
-        lock_acquire (&current_thread->file_list_lock);
-        list_push_back (&current_thread->file_list,
-                        &new_file->elem);
-        lock_release (&current_thread->file_list_lock);
-        current_thread->max_fd += 1;
-        f->eax = new_file->fd;
+        // Check if the file is about to removed.
+        if (!file->inode->removed)
+        {
+          new_file = file_reopen (file);
+          new_file->fd = current_thread->max_fd;
+          new_file->file_name = file_name;
+          lock_acquire (&current_thread->file_list_lock);
+          list_push_back (&current_thread->file_list,
+                          &new_file->elem);
+          lock_release (&current_thread->file_list_lock);
+          current_thread->max_fd += 1;
+          f->eax = new_file->fd;
+        }
+        else
+        {
+          f->eax = -1;
+        }
       }
       lock_release (&filesys_lock);
     }
@@ -441,6 +450,7 @@ syscall_handler (struct intr_frame *f)
     struct file *new_file = file_reopen (file);
     lock_release (&filesys_lock);
     new_file->fd = current_thread->max_fd;
+    new_file->file_name = file->file_name;
     lock_acquire (&current_thread->file_list_lock);
     list_push_back (&current_thread->file_list, &new_file->elem);
     current_thread->max_fd += 1;
@@ -474,6 +484,7 @@ syscall_handler (struct intr_frame *f)
       return;
     }
     
+    append_mapid_list (new_file->fd);
     f->eax = new_file->fd;
   }
   
@@ -485,6 +496,7 @@ syscall_handler (struct intr_frame *f)
     mapid_t mapid = *((mapid_t *) arg1);
     
     munmap_pages (mapid);
+    remove_mapid_list (mapid);
   }
   else
   {
@@ -683,7 +695,7 @@ is_page_overlap (void *addr, off_t file_size)
   void *page = page_start;
   while (page <= page_end)
   {
-    if (lookup_page (current_thread->pagedir, page, false) != NULL)
+    if (supp_table_entry_lookup (current_thread->pagedir, page) != NULL)
       return true;
     page += PGSIZE;
   }
@@ -691,6 +703,47 @@ is_page_overlap (void *addr, off_t file_size)
 }
 
 static void
+append_mapid_list (mapid_t mapid)
+{
+  struct thread *current_thread = thread_current ();
+  
+  struct mapid_list_entry *entry = malloc (sizeof (struct mapid_list_entry));
+  entry->mapid = mapid;
+  
+  lock_acquire (&current_thread->mapid_list_lock);
+  list_push_back (&current_thread->mapid_list, &entry->elem);
+  lock_release (&current_thread->mapid_list_lock);
+}
+
+static void
+remove_mapid_list (mapid_t mapid)
+{
+  struct thread *current_thread = thread_current ();
+  struct list_elem *e;
+  
+  if (list_empty (&current_thread->mapid_list))
+    return;
+  
+  lock_acquire (&current_thread->mapid_list_lock);
+  e = list_begin (&current_thread->mapid_list);
+  while (e != list_end (&current_thread->mapid_list))
+  {
+    struct mapid_list_entry *entry = list_entry (e, struct mapid_list_entry, elem);
+    if (entry->mapid == mapid)
+    {
+      list_remove (&entry->elem);
+      free (entry);
+      lock_release (&current_thread->mapid_list_lock);
+      return;
+    }
+    e = list_next (e);
+  }
+  
+  /* Control cannot reach here. */
+  lock_release (&current_thread->mapid_list_lock);
+}
+
+void
 munmap_pages (mapid_t mapid)
 {
   struct thread *current_thread = thread_current ();
@@ -710,8 +763,22 @@ munmap_pages (mapid_t mapid)
     else
     {
       e = list_next (e);
-      free (entry);
     }
   }
   lock_release (&current_thread->upage_list_lock);
+}
+
+void
+munmap_all (struct thread *t)
+{
+  lock_acquire (&t->mapid_list_lock);
+  struct list_elem *e = list_begin (&t->mapid_list);
+  while (e != list_end (&t->mapid_list))
+  {
+    struct mapid_list_entry *entry = list_entry (e, struct mapid_list_entry, elem);
+    munmap_pages (entry->mapid);
+    e = list_remove (e);
+    free (entry);
+  }
+  lock_release (&t->mapid_list_lock);
 }

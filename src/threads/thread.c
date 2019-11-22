@@ -494,6 +494,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->parent_exited = false;
   list_init (&t->upage_list);
   lock_init (&t->upage_list_lock);
+  list_init (&t->mapid_list);
+  lock_init (&t->mapid_list_lock);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

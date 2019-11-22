@@ -4,6 +4,7 @@
 #include "threads/synch.h"
 #include "filesys/off_t.h"
 #include "filesys/file.h"
+#include "userprog/syscall.h"
 #include <stdio.h>
 
 typedef int mapid_t;
@@ -71,7 +72,7 @@ void supp_free_all (uint32_t *pd, struct thread *t);
 void supp_free_mapping (uint32_t *pd, void *upage);
 bool restore_page (uint32_t *pd, void *uaddr);
 bool supp_new_mmap (uint32_t *pd, void *upage, struct thread *t, struct file *file, mapid_t mapid);
-void supp_unmmap (uint32_t *pd, void *upage);
+void supp_munmap (uint32_t *pd, void *upage);
 bool write_back (struct supp_table_entry *entry);
 bool lazy_load_all_zero (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t );
 bool lazy_load_read (uint32_t *pd, void *upage, void *kpage, bool writable, struct thread *t, struct file *file, off_t ofs);

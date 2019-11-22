@@ -126,8 +126,12 @@ struct thread
     struct list upage_list;		/* List of upages addresses. */
     struct lock upage_list_lock;	/* Synchronize upage_list. */
     
-    /* Used for check current stack boundary. */
+    /* Used for checking of current stack boundary. */
     void *stack_bound;			/* Boundary of current stack. */
+    
+    /* Used for handling of mmapped pages when thread exits. */
+    struct list mapid_list;		/* Mapid list. */
+    struct lock mapid_list_lock;	/* Synchronize mapid_list. */
     
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
