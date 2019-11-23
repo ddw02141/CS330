@@ -88,7 +88,6 @@ void
 swap_free (uint32_t *pd, void *upage)
 {
   /* Get the target swap table entry. */
-  lock_acquire (&swap_table_lock);
   struct swap_table_entry *target_entry = swap_table_entry_lookup (pd, upage);
   
   /* Update the swap bitmap.
@@ -99,6 +98,7 @@ swap_free (uint32_t *pd, void *upage)
   
   /* Remove the entry from the swap table,
      and free the entry. */
+  lock_acquire (&swap_table_lock);
   hash_delete (&swap_table, &target_entry->hash_elem);
   lock_release (&swap_table_lock);
   free (target_entry);
@@ -149,7 +149,9 @@ swap_table_entry_lookup (uint32_t *pd, void *upage)
   
   entry.pd = pd;
   entry.upage = upage;
+  lock_acquire (&swap_table_lock);
   e = hash_find (&swap_table, &entry.hash_elem);
+  lock_release (&swap_table_lock);
   return e != NULL ? hash_entry (e, struct swap_table_entry, hash_elem) : NULL;
 }
 
