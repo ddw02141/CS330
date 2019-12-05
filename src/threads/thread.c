@@ -16,6 +16,7 @@
 #include "vm/frame.h"
 #include "vm/page.h"
 #include "vm/swap.h"
+#include "filesys/cache.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -106,6 +107,8 @@ thread_init (void)
   lock_init (&swap_bitmap_lock);
   lock_init (&swap_disk_lock);
   sema_init (&page_evict_sema, 1);
+  lock_init (&cache_table_lock);
+  lock_init (&cache_bitmap_lock);
   
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();

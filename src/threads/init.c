@@ -39,6 +39,7 @@
 #include "devices/ide.h"
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
+#include "filesys/cache.h"
 #endif
 
 /* Page directory with kernel mappings only. */
@@ -107,6 +108,7 @@ main (void)
   hash_init (&frame_table, frame_hash_func, frame_less_func, NULL);
   hash_init (&supp_page_table, supp_hash_func, supp_less_func, NULL);
   hash_init (&swap_table, swap_hash_func, swap_less_func, NULL);
+  hash_init (&cache_table, cache_hash_func, cache_less_func, NULL);
 
   /* Segmentation. */
 #ifdef USERPROG
@@ -140,6 +142,9 @@ main (void)
   
   /* Initialize swapping related data structures. */
   swap_init ();
+  
+  /* Initialize buffer cache related data structures. */
+  cache_init ();
   
   /* Run actions specified on kernel command line. */
   run_actions (argv);
