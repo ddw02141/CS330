@@ -133,6 +133,10 @@ struct thread
     struct list mapid_list;		/* Mapid list. */
     struct lock mapid_list_lock;	/* Synchronize mapid_list. */
     
+    /* Used for timer_sleep. */
+    struct list_elem telem;		/* Sleep list elem. */
+    int64_t ticks;			/* Wake up ticks. */
+     
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

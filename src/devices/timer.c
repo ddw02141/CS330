@@ -7,6 +7,7 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
   
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -16,6 +17,10 @@
 #if TIMER_FREQ > 1000
 #error TIMER_FREQ <= 1000 recommended
 #endif
+
+/* List of sleeping threads, which will be woken up after
+   given timer ticks. */
+static struct list sleep_list;
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
@@ -37,6 +42,9 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  
+  /* Initialize the sleep list. */
+  list_init (&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -90,10 +98,16 @@ void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
-
+  struct thread *current_thread = thread_current ();
+  
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  
+  current_thread->ticks = start + ticks;
+
+  enum intr_level old_level = intr_disable ();
+  list_push_back (&sleep_list, &current_thread->telem);
+  thread_block ();
+  intr_set_level (old_level);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -122,7 +136,6 @@ timer_nsleep (int64_t ns)
 
 /* Busy-waits for approximately MS milliseconds.  Interrupts need
    not be turned on.
-
    Busy waiting wastes CPU cycles, and busy waiting with
    interrupts off for the interval between timer ticks or longer
    will cause timer ticks to be lost.  Thus, use timer_msleep()
@@ -135,7 +148,6 @@ timer_mdelay (int64_t ms)
 
 /* Sleeps for approximately US microseconds.  Interrupts need not
    be turned on.
-
    Busy waiting wastes CPU cycles, and busy waiting with
    interrupts off for the interval between timer ticks or longer
    will cause timer ticks to be lost.  Thus, use timer_usleep()
@@ -148,7 +160,6 @@ timer_udelay (int64_t us)
 
 /* Sleeps execution for approximately NS nanoseconds.  Interrupts
    need not be turned on.
-
    Busy waiting wastes CPU cycles, and busy waiting with
    interrupts off for the interval between timer ticks or longer
    will cause timer ticks to be lost.  Thus, use timer_nsleep()
@@ -172,6 +183,27 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  
+  int64_t now = timer_ticks ();
+
+  //enum intr_level old_level = intr_disable ();
+
+  struct list_elem *e = list_begin (&sleep_list);
+  while (e != list_end (&sleep_list))
+  {
+    struct thread *t = list_entry (e, struct thread, telem);
+
+    if (t->ticks <= now)
+    {
+      thread_unblock (t);
+      e = list_remove (e);
+    }
+    else
+    {
+      e = list_next (e);
+    }
+  }
+  //intr_set_level (old_level);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
@@ -195,7 +227,6 @@ too_many_loops (unsigned loops)
 
 /* Iterates through a simple loop LOOPS times, for implementing
    brief delays.
-
    Marked NO_INLINE because code alignment can significantly
    affect timings, so that if this function was inlined
    differently in different places the results would be difficult

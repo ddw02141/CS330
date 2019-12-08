@@ -109,6 +109,7 @@ thread_init (void)
   sema_init (&page_evict_sema, 1);
   lock_init (&cache_table_lock);
   lock_init (&cache_bitmap_lock);
+  lock_init (&cache_mutex);
   
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();

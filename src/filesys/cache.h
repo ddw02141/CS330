@@ -1,7 +1,7 @@
 #include "lib/kernel/bitmap.h"
 #include "lib/kernel/hash.h"
 #include "threads/synch.h"
-
+#include "filesys/inode.h"
 
 /* A bitmap which tracks the uses of the cache entries. */
 struct hash cache_table;
@@ -12,6 +12,9 @@ struct lock cache_table_lock;
 /* A lock used for the cache map. */
 struct lock cache_bitmap_lock;
 
+/* A mutex used for the eviction. */
+struct lock cache_mutex;
+
 /* The format of cache_table entry. */
 struct cache_table_entry
 {
@@ -19,22 +22,41 @@ struct cache_table_entry
   
   /* This info does not change. */
   size_t idx;			/* cache_map index. */
-  void *cache;			/* Address of the cache entry. */
+  uint8_t *cache;		/* Address of the cache entry. */
   
   /* This info can change. */
-  struct file *file;		/* File. */
+  struct inode *inode;		/* Inode. */
+  block_sector_t sector;	/* Block sector number. */
+  int sector_ofs;		/* The sector offset. */
+  int chunk_size;		/* The chunk size. */
   bool dirty;			/* True if the cache entry is dirty. */
   bool accessed;		/* True if the cache entry is accessed. */
   
   /* A process will acquire this lock only when it is about to extend a file. */
   struct lock cache_entry_lock;
+  
+  /* This cnt prevent a eviction while some reads or modifyings take place. */
+  size_t cnt;			/* 0 if no use,
+				   more than if any use exists,
+				   -1 if in eviction procedure. */
+  struct lock cnt_lock;		/* A lock for cnt. */
+  
+  /* This semaphore is a mutex for read/modify and flush/evict. */
+  struct semaphore cache_evict_sema;
 };
 
 
 /* Function prototypes. */
 void cache_init (void);
 struct cache_table_entry *get_cache_entry (void);
+void cache_read (struct inode *inode, block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, bool modify);
+void cache_write (struct cache_table_entry *entry);
+void cache_modify (struct inode *inode, block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer);
+void cache_inode_close (struct inode *inode);
+void cache_flush (void);
 struct cache_table_entry *cache_find_victim (void);
-struct cache_table_entry *cache_table_entry_lookup (struct file *file);
+struct cache_table_entry *cache_table_entry_lookup (struct inode *inode, block_sector_t sector);
+struct cache_table_entry *cache_table_inode_lookup (struct inode *inode);
+void flusher_function (void);
 unsigned cache_hash_func (const struct hash_elem *elem, void *aux);
 bool cache_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux);

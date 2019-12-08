@@ -131,20 +131,20 @@ main (void)
   serial_init_queue ();
   timer_calibrate ();
 
+  /* Initialize buffer cache related data structures. */
+  cache_init ();
+  
 #ifdef FILESYS
   /* Initialize file system. */
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
-
+  
   printf ("Boot complete.\n");
   
   /* Initialize swapping related data structures. */
   swap_init ();
-  
-  /* Initialize buffer cache related data structures. */
-  cache_init ();
   
   /* Run actions specified on kernel command line. */
   run_actions (argv);
