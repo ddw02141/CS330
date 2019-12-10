@@ -89,10 +89,6 @@ start_process (void *file_name_)
   /* The load accesses to file system which is critical section. */
   success = load (file_name, &if_.eip, &if_.esp);
   
-  /* Append the current thread into exec list,
-     to deny any write to the running file. */
-  list_push_back (&exec_list, &current_thread->exec_elem);
-  
   /* If load failed, inform to parent, and quit. */
   if (!success)
   {
@@ -263,8 +259,8 @@ process_exit (void)
      First check if the current thread is  already
      holding filesys lock. It is possible if this
      exit is due to page fault during file read. */
-  if (lock_held_by_current_thread (&filesys_lock))
-    lock_release (&filesys_lock);
+  //if (lock_held_by_current_thread (&filesys_lock))
+  //  lock_release (&filesys_lock);
   file_all_close ();
   
   /************************************************/
@@ -285,10 +281,6 @@ process_exit (void)
   /************************************************/
   /* This thread is a child thread of one thread. */
   /************************************************/
-  
-  /* Remove this thread from exec_list.
-     After the executable exits, it should allow writes. */
-  list_remove (&cur->exec_elem);
   
   /* If a exec fails to load, wake up its parent. */
   sema_up (&parent->exec_sema);
@@ -412,9 +404,9 @@ file_all_close (void)
   {
     struct file *file = list_entry (e, struct file, elem);
     e = list_remove (&file->elem);
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     file_close (file);
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
   }
 }
 
@@ -560,9 +552,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   file = filesys_open (file_name);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
   
   if (file == NULL) 
     {
@@ -570,10 +562,20 @@ load (const char *file_name, void (**eip) (void), void **esp)
       goto done; 
     }
   
+  /* If the file exists, append it to the threads's file list,
+     and deny any write during execution. */
+  file->file_name = file_name;
+  lock_acquire (&t->file_list_lock);
+  list_push_back (&t->file_list, &file->elem);
+  lock_release (&t->file_list_lock);
+  //lock_acquire (&filesys_lock);
+  file_deny_write (file);
+  //lock_release (&filesys_lock);
+  
   /* Read and verify executable header. */
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   off_t ehdr_read_size = file_read (file, &ehdr, sizeof ehdr);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
   
   if (ehdr_read_size != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -596,13 +598,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
       if (file_ofs < 0 || file_ofs > file_length (file))
         goto done;
       
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       file_seek (file, file_ofs);
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
       
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       off_t phdr_read_size = file_read (file, &phdr, sizeof phdr);
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
       
       if (phdr_read_size != sizeof phdr)
         goto done;
@@ -664,10 +666,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  //lock_acquire (&filesys_lock);
-  //file_close (file);
-  //lock_release (&filesys_lock);
-  
   return success;
 }
 
@@ -744,9 +742,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   
   struct thread *current_thread = thread_current ();
   
-  lock_acquire (&filesys_lock);
+  //lock_acquire (&filesys_lock);
   file_seek (file, ofs);
-  lock_release (&filesys_lock);
+  //lock_release (&filesys_lock);
   
   while (read_bytes > 0 || zero_bytes > 0) 
     {
@@ -767,9 +765,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           return false;
         
         /* Load this page. */
-        lock_acquire (&filesys_lock);
+        //lock_acquire (&filesys_lock);
         off_t kpage_read_size = file_read (file, kpage, page_read_bytes);
-        lock_release (&filesys_lock);
+        //lock_release (&filesys_lock);
         
         if (kpage_read_size != (int) page_read_bytes)
         {
@@ -806,9 +804,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           /* Because this page should be filled with
              read bytes from file, store the needed
              information to load later. */
-          lock_acquire (&filesys_lock);
+          //lock_acquire (&filesys_lock);
           off_t ofs_now = file_tell (file);
-          lock_release (&filesys_lock);
+          //lock_release (&filesys_lock);
           supp_new_mapping (current_thread->pagedir,
                             upage, NULL, writable,
                             current_thread, PAL_USER,
@@ -816,9 +814,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           /* Because there's no file read in this part,
              due to the lazy loading, we should update
              file's position by ourselves. */
-          lock_acquire (&filesys_lock);
+          //lock_acquire (&filesys_lock);
           file_seek (file, ofs_now + PGSIZE);
-          lock_release (&filesys_lock);
+          //lock_release (&filesys_lock);
         }
       }
       

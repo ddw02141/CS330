@@ -98,7 +98,6 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-  list_init (&exec_list);
   list_init (&exit_list);
   lock_init (&exit_list_lock);
   lock_init (&frame_table_lock);

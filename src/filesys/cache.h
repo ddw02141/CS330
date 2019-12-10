@@ -15,6 +15,14 @@ struct lock cache_bitmap_lock;
 /* A mutex used for the eviction. */
 struct lock cache_mutex;
 
+/* Enum that encodes the aim of cache_read. */
+enum cache_mode
+{
+  READ = 1,
+  MODIFY = 2,
+  FETCH = 4
+};
+
 /* The format of cache_table entry. */
 struct cache_table_entry
 {
@@ -25,7 +33,6 @@ struct cache_table_entry
   uint8_t *cache;		/* Address of the cache entry. */
   
   /* This info can change. */
-  struct inode *inode;		/* Inode. */
   block_sector_t sector;	/* Block sector number. */
   int sector_ofs;		/* The sector offset. */
   int chunk_size;		/* The chunk size. */
@@ -43,20 +50,23 @@ struct cache_table_entry
   
   /* This semaphore is a mutex for read/modify and flush/evict. */
   struct semaphore cache_evict_sema;
+  
+  /* This boolean prevents multiple read aheader. */
+  bool call_read_aheader;	/* True if already called. */
 };
 
 
 /* Function prototypes. */
 void cache_init (void);
 struct cache_table_entry *get_cache_entry (void);
-void cache_read (struct inode *inode, block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, bool modify);
+void cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, enum cache_mode);
 void cache_write (struct cache_table_entry *entry);
-void cache_modify (struct inode *inode, block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer);
-void cache_inode_close (struct inode *inode);
+void cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer);
+void cache_inode_close (block_sector_t start, block_sector_t end);
 void cache_flush (void);
 struct cache_table_entry *cache_find_victim (void);
-struct cache_table_entry *cache_table_entry_lookup (struct inode *inode, block_sector_t sector);
-struct cache_table_entry *cache_table_inode_lookup (struct inode *inode);
-void flusher_function (void);
+struct cache_table_entry *cache_table_entry_lookup (block_sector_t sector);
+void flusher_function (void *aux);
+void read_aheader_function (void *aux);
 unsigned cache_hash_func (const struct hash_elem *elem, void *aux);
 bool cache_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux);

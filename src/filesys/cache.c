@@ -12,6 +12,7 @@
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "filesys/filesys.h"
+#include "filesys/free-map.h"
 
 //static void *disk_free_map;
 
@@ -45,6 +46,7 @@ cache_init (void)
       /* Allocate the cache table entry. */
       struct cache_table_entry *entry = malloc (sizeof (struct cache_table_entry));
       entry->idx = bitmap_idx;
+      entry->sector = -1;
       entry->cache = page + 512 * j;
       entry->dirty = false;
       entry->accessed = false;
@@ -52,6 +54,7 @@ cache_init (void)
       entry->cnt = 0;
       lock_init (&entry->cnt_lock);
       sema_init (&entry->cache_evict_sema, 1);
+      entry->call_read_aheader = false;
       
       /* Insert the entry into the cache table. */
       lock_acquire (&cache_table_lock);
@@ -72,14 +75,14 @@ cache_init (void)
    If it is, read the content from buffer cache, not from disk,
    and it not, fetch the sector into the buffer cache. */
 void
-cache_read (struct inode *inode, block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, bool modify)
+cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, enum cache_mode mode)
 {
   /* Finding the entry should be wrapped by Mutex.
      If not, entry can be evicted after the lookup succeeds. */
   lock_acquire (&cache_mutex);
   
   /* Check if given file sector is already fetched in buffer cache. */
-  struct cache_table_entry *entry = cache_table_entry_lookup (inode, sector);
+  struct cache_table_entry *entry = cache_table_entry_lookup (sector);
   
   /* If given file sector is not in buffer cache, get one entry. */
   if (entry == NULL)
@@ -87,24 +90,26 @@ cache_read (struct inode *inode, block_sector_t sector, int sector_ofs, int chun
     /* Get a cache entry. */
     entry = get_cache_entry ();
     
-    /* The entry should have cnt 0. */
-    lock_acquire (&entry->cnt_lock);
+    if (mode != FETCH)
+    {
+      /* The entry should have cnt 0. */
+      lock_acquire (&entry->cnt_lock);
     
-    /* This semaphore prevents the eviction or close of this entry
-       during read or modify procedure.
-       This semaphore is downed by only the first reader or modifier. */
-    sema_down (&entry->cache_evict_sema);
-    
-    entry->cnt++;
-    lock_release (&entry->cnt_lock);
+      /* This semaphore prevents the eviction or close of this entry
+         during read or modify procedure.
+         This semaphore is downed by only the first reader or modifier. */ 
+      sema_down (&entry->cache_evict_sema);
+      
+      entry->cnt++;
+      lock_release (&entry->cnt_lock);
+    }
     
     /* Update the cache table entry. */
-    entry->inode = inode;
     entry->sector = sector;
     entry->sector_ofs = sector_ofs;
     entry->chunk_size = chunk_size;
     entry->accessed = true;		// Prevent imediate eviction.
-    
+      
     /* Fetch the file sector into the buffer cache. */
     block_read (fs_device, sector, entry->cache);
   }
@@ -124,9 +129,10 @@ cache_read (struct inode *inode, block_sector_t sector, int sector_ofs, int chun
   lock_release (&cache_mutex);
   
   /* If this function is called by file_write (i.e. by cache_modify),
+     or read aheader, because they want no read but just the fetching,
      do not read the content into the buffer and just return.
-     It calls this function just to make sure that the entry is in cache. */
-  if (modify)
+     They call this function just to make sure that the entry is in cache. */
+  if (mode != READ)
     return;
   
   /* Read the full sector. */
@@ -173,13 +179,13 @@ cache_write (struct cache_table_entry *entry)
    When cache_write is called, the content of the buffer cache is written to
    the disk. */
 void
-cache_modify (struct inode *inode, block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer)
+cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer)
 {
   /* If the file sector is not in the buffer cache, fetch it.
      In cache_read, if this is the first modifier, semaphore is downed.
      The cnt is also increased. */
-  cache_read (inode, sector, sector_ofs, chunk_size, buffer, true);
-  struct cache_table_entry *entry = cache_table_entry_lookup (inode, sector);
+  cache_read (sector, 0, 0, NULL, MODIFY);
+  struct cache_table_entry *entry = cache_table_entry_lookup (sector);
   
   entry->accessed = true;
   entry->dirty = true;
@@ -210,19 +216,29 @@ cache_modify (struct inode *inode, block_sector_t sector, int sector_ofs, int ch
    ## This function should be synchronized with get_cache_entry,
       especially, with the eviction routine. */
 void
-cache_inode_close (struct inode *inode)
+cache_inode_close (block_sector_t start, block_sector_t end)
 {
   lock_acquire (&cache_mutex);
   
-  struct cache_table_entry *entry = cache_table_inode_lookup (inode);
-  while (entry != NULL)
+  block_sector_t sector = start;
+  while (sector <= end)
   {
+    struct cache_table_entry *entry = cache_table_entry_lookup (sector);
+    
+    if (entry == NULL)
+    {
+      sector++;
+      continue;
+    }
+    
     /* Write back. */
     cache_write (entry);
     
     /* Update the cache table entry. */
     lock_acquire (&cache_table_lock);
-    entry->inode = NULL;
+    entry->sector = -1;
+    entry->dirty = false;
+    entry->accessed = false;
     lock_release (&cache_table_lock);
     
     /* Update the cache bitmap. */
@@ -231,7 +247,7 @@ cache_inode_close (struct inode *inode)
     lock_release (&cache_bitmap_lock);
     
     /* Advance. */
-    entry = cache_table_inode_lookup (inode);
+    sector++;
   }
   
   lock_release (&cache_mutex);
@@ -354,7 +370,7 @@ cache_find_victim (void)
    If it is, return a pointer to the entry,
    and if not, return NULL. */
 struct cache_table_entry *
-cache_table_entry_lookup (struct inode *inode, block_sector_t sector)
+cache_table_entry_lookup (block_sector_t sector)
 {
   /* Iterate the cache table and find the entry with given inode and sector number. */
   struct hash_iterator i;
@@ -364,7 +380,7 @@ cache_table_entry_lookup (struct inode *inode, block_sector_t sector)
   while (hash_next (&i))
   {
     struct cache_table_entry *entry = hash_entry (hash_cur (&i), struct cache_table_entry, hash_elem);
-    if (entry->inode == inode && entry->sector == sector)
+    if (entry->sector == sector)
     {
       entry->accessed = true;
       lock_release (&cache_table_lock);
@@ -375,35 +391,12 @@ cache_table_entry_lookup (struct inode *inode, block_sector_t sector)
   return NULL;
 }
 
-/* Get an entry for given inode if any.
-   If there's not an entry for such inode, return NULL.
-   This function can be used for inode close. */
-struct cache_table_entry *
-cache_table_inode_lookup (struct inode *inode)
-{
-  /* Iterate the cache table and find the entry with given inode. */
-  struct hash_iterator i;
-  
-  lock_acquire (&cache_table_lock);
-  hash_first (&i, &cache_table);
-  while (hash_next (&i))
-  {
-    struct cache_table_entry *entry = hash_entry (hash_cur (&i), struct cache_table_entry, hash_elem);
-    if (entry->inode == inode)
-    {
-      lock_release (&cache_table_lock);
-      return entry;
-    }
-  }
-  lock_release (&cache_table_lock);
-  return NULL;
-}
-
 /* The thread function of the flusher thread.
    The flusher thread periodically flushes out the cache,
-   and sleeps. */
+   and sleeps.
+   This function needs no argument. */
 void
-flusher_function (void)
+flusher_function (void *aux UNUSED)
 {
   while (true)
   {
@@ -413,9 +406,15 @@ flusher_function (void)
 }
 
 /* The thread function of the read aheader thread.
-   The read aheader thread calls cache_read for the given disk sector. */
+   The read aheader thread calls cache_read for the given disk sector.
+   This function needs an argument which is a sector number. */
 void
-
+read_aheader_function (void *aux)
+{
+  block_sector_t sector = *(block_sector_t *) aux;
+  cache_read (sector, 0, 0, NULL, FETCH);
+  free (aux);
+}
 
 /* A hash function used for cache_table.
    The bitmap index of the cache is used as a key. */

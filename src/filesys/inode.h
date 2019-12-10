@@ -8,26 +8,28 @@
 
 struct bitmap;
 
-/* On-disk inode.
-   Must be exactly BLOCK_SECTOR_SIZE bytes long. */
-struct inode_disk
-  {
-    block_sector_t start;               /* First data sector. */
-    off_t length;                       /* File size in bytes. */
-    unsigned magic;                     /* Magic number. */
-    uint32_t unused[125];               /* Not used. */
-  };
+/* On-disk index table.
+   Must be exactly BLOCK_SECTOR_SIZE bytes long.
+   If an instance of this struct is used as a first index table,
+   a content is interpreted as a sector number of second index table.
+   If an instance of this struct is used as a second index table,
+   a content is interpreted as a sector number of the real file content.*/
+struct idx_table
+{
+  block_sector_t table[128];		/* sector index table. */
+};
 
 /* In-memory inode. */
 struct inode
-  {
-    struct list_elem elem;              /* Element in inode list. */
-    block_sector_t sector;              /* Sector number of disk location. */
-    int open_cnt;                       /* Number of openers. */
-    bool removed;                       /* True if deleted, false otherwise. */
-    int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
-    struct inode_disk data;             /* Inode content. */
-  };
+{
+  struct list_elem elem;		/* Element in inode list. */
+  block_sector_t sector;		/* Sector number of disk location. */
+  int open_cnt;				/* Number of openers. */
+  bool removed;				/* True if deleted, false otherwise. */
+  int deny_write_cnt;			/* 0: writes ok, >0: deny writes. */
+  block_sector_t num_sector;		/* The number of sectors of this inode. */
+  struct idx_table first_idx_table;	/* Inode content. */
+};
 
 void inode_init (void);
 bool inode_create (block_sector_t, off_t);

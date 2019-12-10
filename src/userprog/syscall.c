@@ -177,9 +177,9 @@ syscall_handler (struct intr_frame *f)
     }
     else
     {
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       f->eax = filesys_create (file_name, size);
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
     }
   }
   
@@ -190,9 +190,9 @@ syscall_handler (struct intr_frame *f)
   {
     char *file_name = *((char **) arg1);
     
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     f->eax = filesys_remove(file_name);
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -211,7 +211,7 @@ syscall_handler (struct intr_frame *f)
     }
     else
     {
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       file = find_file_by_name (file_name);
       // Check if the file is already opened by this thread.
       if (file == NULL)
@@ -256,7 +256,7 @@ syscall_handler (struct intr_frame *f)
           f->eax = -1;
         }
       }
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
     }
   }
   
@@ -267,7 +267,7 @@ syscall_handler (struct intr_frame *f)
   {
     int fd = *((int *) arg1);
     
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     struct file *file = find_file_by_fd (fd);
     
     if (file == NULL)
@@ -278,7 +278,7 @@ syscall_handler (struct intr_frame *f)
     {
       f->eax = file_length (file);
     }
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -296,7 +296,7 @@ syscall_handler (struct intr_frame *f)
       error_exit ();
     }
     
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     if (fd == 0)
     {
       input_getc(buffer, size);
@@ -312,7 +312,7 @@ syscall_handler (struct intr_frame *f)
         f->eax = file_read (file, buffer, size);
       }
     }
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -330,7 +330,7 @@ syscall_handler (struct intr_frame *f)
       error_exit ();
     }
     
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     if (fd == 1)
     {
       putbuf (buffer, size);
@@ -344,18 +344,10 @@ syscall_handler (struct intr_frame *f)
       }
       else
       {
-        // Check if given file is running.
-        if (find_exec_by_name (file->file_name))
-        {
-          f->eax = 0;
-        }
-        else
-        {
-          f->eax = file_write (file, buffer, size);
-        }
+        f->eax = file_write (file, buffer, size);
       }
     }
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -401,9 +393,9 @@ syscall_handler (struct intr_frame *f)
       list_remove (&file->elem);
       lock_release (&current_thread->file_list_lock);
       
-      lock_acquire (&filesys_lock);
+      //lock_acquire (&filesys_lock);
       file_close (file);
-      lock_release (&filesys_lock);
+      //lock_release (&filesys_lock);
     }
   }
   
@@ -446,9 +438,9 @@ syscall_handler (struct intr_frame *f)
     }
     
     /* Reopen the file for an independent reference. */
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     struct file *new_file = file_reopen (file);
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
     new_file->fd = current_thread->max_fd;
     new_file->file_name = file->file_name;
     lock_acquire (&current_thread->file_list_lock);
@@ -457,9 +449,9 @@ syscall_handler (struct intr_frame *f)
     lock_release (&current_thread->file_list_lock);
     
     /* If target file has length 0, fail. */
-    lock_acquire (&filesys_lock);
+    //lock_acquire (&filesys_lock);
     off_t file_size = file_length (new_file);
-    lock_release (&filesys_lock);
+    //lock_release (&filesys_lock);
     if (file_size == 0)
     {
       f->eax = -1;
