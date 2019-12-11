@@ -180,13 +180,16 @@ cache_write (struct cache_table_entry *entry)
    When cache_write is called, the content of the buffer cache is written to
    the disk. */
 void
-cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer)
+cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer, bool extend)
 {
   /* If the file sector is not in the buffer cache, fetch it.
      In cache_read, if this is the first modifier, semaphore is downed.
      The cnt is also increased. */
   cache_read (sector, 0, 0, NULL, MODIFY);
   struct cache_table_entry *entry = cache_table_entry_lookup (sector);
+  
+  if (extend)
+    lock_acquire (&entry->cache_entry_lock);
   
   entry->accessed = true;
   entry->dirty = true;
@@ -202,6 +205,9 @@ cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8
     memcpy (entry->cache + sector_ofs, buffer, chunk_size);
   }
   
+  if (extend)
+    lock_release (&entry->cache_entry_lock);
+  
   /* If this is the last reader/modifier, up the semaphore.
      Update the cnt. */
   lock_acquire (&entry->cnt_lock);
@@ -209,6 +215,24 @@ cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8
     sema_up (&entry->cache_evict_sema);
   entry->cnt--;
   lock_release (&entry->cnt_lock);
+}
+
+/* Set the dirty boolean of cache table entry with given sector. */
+void
+cache_set_dirty (block_sector_t sector)
+{
+  lock_acquire (&cache_mutex);
+  
+  struct cache_table_entry *entry = cache_table_entry_lookup (sector);
+  if (entry == NULL)
+  {
+    printf ("Fail: Set dirty with lookup.\n");
+    lock_release (&cache_mutex);
+    return;
+  }
+  entry->dirty = true;
+  lock_release (&cache_mutex);
+  return;
 }
 
 /* Write back all cache entries related to given inode to their sectors,

@@ -60,6 +60,42 @@ num_data_sector (struct inode *inode)
   return info->second_index + 1;
 }
 
+/* Calculate the next indices of the given table indices. */
+static void
+next_indices (size_t first_old, size_t second_old, size_t *first_new, size_t *second_new)
+{
+  size_t first, second;
+  
+  /* There's no data yet. */
+  if (first_old == -1)
+  {
+    *first_new = 0;
+    *second_new = 0;
+    return;
+  }
+  
+  first = first_old;
+  second = second_old + 1;
+  
+  if (second == 128)
+  {
+    first += 1;
+    second = 0;
+  }
+  
+  /* This should not happen.
+     A file size exeeds 8MB. */
+  if (first == 128)
+  {
+    *first_new = -1;
+    *second_new = -1;
+    return;
+  }
+  
+  *first_new = first;
+  *second_new = second;
+}
+
 /* Get the sector number for real data,
    with given first index and second index. */
 static block_sector_t
@@ -72,6 +108,9 @@ get_data_sector (struct inode *inode, size_t first_index, size_t second_index)
   /* Check if given indices exceeds the boundary. */
   size_t first_bound = num_second_table (inode);
   size_t second_bound = num_data_sector (inode);
+  
+  if (first_bound == -1)
+    return -1;
   
   if (first_index >= first_bound)
     return -1;
@@ -104,9 +143,133 @@ get_data_sector (struct inode *inode, size_t first_index, size_t second_index)
    and then return the sector number for data which has given
    offset. */
 static block_sector_t
-extend_inode (struct inode *inode, off_t size, off_t offset)
+extend_inode (struct inode *inode, block_sector_t num_sector_new)
 {
+  block_sector_t num_sector_old, num_sector;
+  size_t first_index_old, second_index_old;
+  size_t first_index_new, second_index_new;
+  size_t first_index, second_index;
+  off_t length_old;
+  block_sector_t table;
   
+  /* Get the current information of the given inode. */
+  struct sector_disk *info = cache_read (inode->sector, 0, 0, NULL, FETCH);
+  first_index_old = info->first_index;
+  second_index_old = info->second_index;
+  num_sector_old = info->num_sector;
+  length_old = info->length;
+  table = info->table_sector;
+  
+  /* Check the number of sectors needed. */
+  num_sector = num_sector_new - num_sector_old;
+  
+  /* Mutex. */
+  lock_acquire (&inode_mutex);
+  
+  /* Check if there's enough free sectors. */
+  if (num_sector > free_map_count ())
+  {
+    lock_release (&inode_mutex);
+    return -1;
+  }
+  
+  /* Get the next index of the index tables. */
+  next_indices (first_index_old, second_index_old, &first_index, &second_index);
+  
+  /* Get the final index of the index tables. */
+  first_index_new = (num_sector_new - 1) / 128;
+  second_index_new = (num_sector_new - 1) % 128;
+  
+  /* Now allocate, and save the sectors for tables, and data. */
+  while (first_index <= first_index_new)
+  {
+    struct idx_table *first_table, *second_table;
+    static char zeros[BLOCK_SECTOR_SIZE];
+    
+    first_table = cache_read (table, 0, 0, NULL, FETCH);
+    
+    /* If the first index not equals to old first index,
+       allocate a second indirect index table,
+       fetch the first indirect index table, and modify it. */
+    if (first_index == first_index_old)
+    {
+      second_table = cache_read (first_table->table[first_index], 0, 0, NULL, FETCH);
+    }
+    else
+    {
+      free_map_allocate (1, &first_table->table[first_index]);
+      cache_set_dirty (table);
+      second_table = calloc (1, sizeof (struct idx_table));
+      if (second_table == NULL)
+      {
+        lock_release (&inode_mutex);
+        return -1;
+      }
+    }
+    
+    /* Now allocate the data sector,
+       modify second indirect index table and save. */
+    while (second_index < 128)
+    {
+      if (first_index == first_index_new && second_index > second_index_new)
+        break;
+      
+      free_map_allocate (1, &second_table->table[second_index]);
+      block_write (fs_device, second_table->table[second_index], zeros);
+      
+      /* Advance. */
+      second_index++;
+    }
+    
+    first_table = cache_read (table, 0, 0, NULL, FETCH);
+    
+    /* Save the second indirect index table. */
+    if (first_index == first_index_old)
+    {
+      /* Set the dirty boolean of the entry for the second indirect index table. */
+      cache_set_dirty (first_table->table[first_index]);
+    }
+    else
+    {
+      block_write (fs_device, first_table->table[first_index], second_table);
+      free (second_table);
+    }
+    
+    /* Advance. */
+    if (second_index == 128)
+      second_index = 0;
+    first_index++;
+  }
+  
+  /* Save the first indirect index table. */
+  cache_set_dirty (table);
+  
+  /* Calculate the result length.
+     Do not consider the length about the last sector,
+     because it will be considered at inode_write_at. */
+  off_t length_new;
+  off_t length_ofs = length_old % BLOCK_SECTOR_SIZE;
+  if (length_ofs == 0)
+  {
+    length_new = length_old + (num_sector - 1) * BLOCK_SECTOR_SIZE;
+  }
+  else
+  {
+    length_new = length_old - length_ofs + (num_sector * BLOCK_SECTOR_SIZE);
+  }
+  
+  /* Update the sector disk. */
+  info = cache_read (inode->sector, 0, 0, NULL, FETCH);
+  info->length = length_new;
+  info->first_index = first_index_new;
+  info->second_index = second_index_new;
+  info->num_sector = num_sector_new;
+  cache_set_dirty (inode->sector);
+  
+  lock_release (&inode_mutex);
+  
+  /* Return the sector for the data. */
+  return get_data_sector (inode, first_index_new, second_index_new);
 }
 
 /* Release free map for given sectors.
@@ -255,6 +418,10 @@ inode_create (block_sector_t sector, off_t length)
   
   while (table_idx < num_table)
   {
+    /* If the length is 0, do not allocate the second indirect index table. */
+    if (length == 0)
+      break;
+    
     /* First allocate the sector. */
     free_map_allocate (1, &first_table->table[table_idx]);
     
@@ -305,8 +472,16 @@ inode_create (block_sector_t sector, off_t length)
      And free the allocated memory for the sector_disk. */
   info->length = length;
   info->num_sector = num_sector;
-  info->first_index = (num_sector - 1) / 128;
-  info->second_index = (num_sector - 1) % 128;
+  if (num_sector == 0)
+  {
+    info->first_index = -1;
+    info->second_index = -1;
+  }
+  else
+  {
+    info->first_index = (num_sector - 1) / 128;
+    info->second_index = (num_sector - 1) % 128;
+  }
   block_write (fs_device, sector, info);
   free (info);
   
@@ -468,35 +643,94 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 
   while (size > 0) 
   {
+    /* The boolean extend determines if update of file length is necessary. */
+    bool extend = false;
+    
     /* Calculate the index of sector within the inode. */
     block_sector_t sector_idx = byte_to_sector (inode, offset);
+    
+    /* The offset within the sector. */
+    int sector_ofs = offset % BLOCK_SECTOR_SIZE;
+    
+    /* Bytes left in inode, bytes left in sector, lesser of the two. */
+    int sector_left = BLOCK_SECTOR_SIZE - sector_ofs;
+    
+    /* Number of bytes to actually write into this sector. */
+    int chunk_size = size < sector_left ? size : sector_left;
+    if (chunk_size <= 0)
+      break;
     
     /* Get the actual sector number for the given offset. */
     block_sector_t first_idx = sector_idx / 128;
     block_sector_t second_idx = sector_idx % 128;
+    
+    /* Get the sector number for the data. */
     block_sector_t sector = get_data_sector (inode, first_idx, second_idx);
     
-    /* Need to extend the file. */
+    /* If file extension is needed, extend.
+       Calculate the additional length.
+       Note that the extend_inode updates the length if the distance between
+       sector with given offset and current sector boundary is more than
+       one block. */
     if (sector == -1)
     {
-      break;
+      sector = extend_inode (inode, sector_idx + 1);
+      if (sector == -1)
+        break;
+      extend = true;
     }
     
-    int sector_ofs = offset % BLOCK_SECTOR_SIZE;
+    struct sector_disk *info = cache_read (inode->sector, 0, 0, NULL, FETCH);
+    off_t length_old = info->length;
+    off_t additional_len;
     
-    /* Bytes left in inode, bytes left in sector, lesser of the two. */
-    off_t inode_left = inode_length (inode) - offset;
-    int sector_left = BLOCK_SECTOR_SIZE - sector_ofs;
-    int min_left = inode_left < sector_left ? inode_left : sector_left;
-    
-    /* Number of bytes to actually write into this sector. */
-    int chunk_size = size < min_left ? size : min_left;
-    if (chunk_size <= 0)
-      break;
+    /* EXTENSION.
+       If given offset is larger than current length,
+       the difference should be added to length. */
+    if (offset > length_old)
+    {
+      additional_len = chunk_size;
+      additional_len += offset - length_old;
+      extend = true;
+    }
+    /* EXTENSION.
+       If given offset is smaller than current length,
+       and the end of extension is larger than or equals to current length,
+       additional length is smaller than the chunk size. */
+    else if (offset < length_old && offset + chunk_size - 1 >= length_old)
+    {
+      additional_len = chunk_size;
+      additional_len -= length_old - offset;
+      extend = true;
+    }
+    /* EXTENSION.
+       If given offset equals to current length,
+       additional length is the chunk size. */
+    else if (offset == length_old)
+    {
+      additional_len = chunk_size;
+      extend = true;
+    }
+    /* NO EXTENSION.
+       If given offset is smaller than current length + 1,
+       and the end of written chunk is smaller or equal than
+       the current length, there's no additional length. */
+    else
+    {
+      ;
+    } 
     
     /* Fetch the sector into the buffer cache,
        and modify the content of the cache. */
-    cache_modify (sector, sector_ofs, chunk_size, buffer + bytes_written);
+    cache_modify (sector, sector_ofs, chunk_size, buffer + bytes_written, extend);
+    
+    /* Update the file length if it's extended. */
+    if (extend)
+    {
+      struct sector_disk *info = cache_read (inode->sector, 0, 0, NULL, FETCH);
+      info->length += additional_len;
+      cache_set_dirty (inode->sector);
+    }
     
     /* Advance. */
     size -= chunk_size;
