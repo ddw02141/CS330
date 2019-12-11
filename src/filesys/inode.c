@@ -35,32 +35,29 @@ byte_to_sector (const struct inode *inode, off_t pos)
 }
 
 /* Return the number of second indirect index table stored
-   in the given first indirect index table.
-   This function scans and find -1 in the first table. */
+   in the first indirect index table in inode. */
 static block_sector_t
-first_table_to_num_second_table (struct idx_table *first_table)
+num_second_table (struct inode *inode)
 {
-  for (size_t i = 0; i < 128; i++)
-  {
-    if (first_table->table[i] == -1)
-      return i;
-  }
-  return 128;
+  ASSERT (inode != NULL);
+  
+  /* Fetch the sector_disk and get the first_index. */
+  struct sector_disk *info = cache_read (inode->sector, 0, 0, NULL, FETCH);
+  
+  return info->first_index + 1;
 }
 
-/* Return the number of data sector table stored
-   in the given second indirect index table.
-   The given second indirect index table would be
-   returned from first_table_to_num_second_table. */
+/* Return the number of data sectors stored
+   in the second indirect index table in inode. */
 static block_sector_t
-second_table_to_num_sector (struct idx_table *second_table)
+num_data_sector (struct inode *inode)
 {
-  for (size_t i = 0; i < 128; i++)
-  {
-    if (second_table->table[i] == -1)
-      return i;
-  }
-  return 128;
+  ASSERT (inode != NULL);
+  
+  /* Fetch the sector_disk and get the second_idx. */
+  struct sector_disk *info = cache_read (inode->sector, 0, 0, NULL, FETCH);
+  
+  return info->second_index + 1;
 }
 
 /* Get the sector number for real data,
@@ -72,28 +69,44 @@ get_data_sector (struct inode *inode, size_t first_index, size_t second_index)
   struct idx_table *first_table, *second_table;
   block_sector_t second_table_sector, data_sector;
   
+  /* Check if given indices exceeds the boundary. */
+  size_t first_bound = num_second_table (inode);
+  size_t second_bound = num_data_sector (inode);
+  
+  if (first_index >= first_bound)
+    return -1;
+  
+  if (first_index == first_bound - 1 && second_index >= second_bound)
+    return -1;
+  
   /* Fetch the sector_disk, and get the sector number for
      the first indirect index table. */
   info = cache_read (inode->sector, 0, 0, NULL, FETCH);
   block_sector_t table_sector = info->table_sector;
   
   /* Fetch the first indirect table,
-     get the sector number for the first_index,
-     and check if the first_index exceeds the boundary. */
+     get the sector number for the first_index. */
   first_table = cache_read(table_sector, 0, 0, NULL, FETCH);
   second_table_sector = first_table->table[first_index];
-  if (first_index >= first_table_to_num_second_table (first_table))
-    return -1;
   
   /* Fetch the second indirect table,
-     get the sector number for the second_index,
-     and check if the second_index exceeds the boundary. */
+     get the sector number for the second_index. */
   second_table = cache_read(first_table->table[first_index], 0, 0, NULL, FETCH);
   data_sector = second_table->table[second_index];
-  if (second_index >= second_table_to_num_sector (second_table))
-    return -1;
   
   return data_sector;
+}
+
+/* Extend a file by allocate extra sectors for given inode.
+   Calculate how many sectors are needed for given offset and
+   size, considering number of sectors allocated currently.
+   Update the inode's length information, and index tables,
+   and then return the sector number for data which has given
+   offset. */
+static block_sector_t
+extend_inode (struct inode *inode, off_t size, off_t offset)
+{
+  
 }
 
 /* Release free map for given sectors.
@@ -110,24 +123,30 @@ free_map_release_inode (struct inode *inode)
   info = cache_read (inode->sector, 0, 0, NULL, FETCH);
   block_sector_t table = info->table_sector;
   
+  /* Get the index boundaries. */
+  size_t first_bound = num_second_table (inode);
+  size_t second_bound = num_data_sector (inode);
+  
   /* Iterate the first indirect index table. */
-  while (first_idx < 128)
+  while (first_idx < first_bound)
   {
+    /* Fetch the first indirect index table, and get the sector number
+       for the second indirect index table. */
     first_table = cache_read (table, 0, 0, NULL, FETCH);
     block_sector_t table_sector = first_table->table[first_idx];
-    
-    if (table_sector == -1)
-      break;
     
     /* Iterate the second indirect index table. */
     size_t second_idx = 0;
     while (second_idx < 128)
     {
+      /* This is the end of the data sectors. */
+      if (first_idx == first_bound - 1 && second_idx == second_bound - 1)
+        break;
+      
+      /* Fetch the second indirect index table, and get the sector number
+         for the data sector. */
       second_table = cache_read (table_sector, 0, 0, NULL, FETCH);
       block_sector_t data_sector = second_table->table[second_idx];
-      
-      if (data_sector == -1)
-        break;
       
       /* If this sector is in buffer cache, evict and flush. */
       cache_inode_close (data_sector);
@@ -268,13 +287,6 @@ inode_create (block_sector_t sector, off_t length)
       sector_idx++;
     }
     
-    /* If the number of sectors for real data is not a multiple of 128,
-       save -1 to indicate the end. */
-    if (sector_idx % 128 != 0)
-    {
-      second_table->table[sector_idx % 128] = -1;
-    }
-    
     /* Save one second indirect index table sector.
        And free the allocated memory for the second table. */
     block_write (fs_device, first_table->table[table_idx], second_table);
@@ -284,21 +296,17 @@ inode_create (block_sector_t sector, off_t length)
     table_idx++;
   }
   
-  /* If the number of sectors for second indirect index table is not
-     a multiple of 128, save -1 to indicate the end. */
-  if (table_idx != 128)
-  {
-    first_table->table[table_idx] = -1;
-  }
-  
   /* Save the first indirect index table sector.
      And free the allocated memory for the first table. */
   block_write (fs_device, info->table_sector, first_table);
   free (first_table);
   
   /* Save the sector_disk sector.
-     And free the allocated memory for the first table. */
+     And free the allocated memory for the sector_disk. */
   info->length = length;
+  info->num_sector = num_sector;
+  info->first_index = (num_sector - 1) / 128;
+  info->second_index = (num_sector - 1) % 128;
   block_write (fs_device, sector, info);
   free (info);
   
@@ -339,16 +347,6 @@ inode_open (block_sector_t sector)
   inode->open_cnt = 1;
   inode->deny_write_cnt = 0;
   inode->removed = false;
-  
-  /* Fetch and read the first indirect index table in the buffer cache,
-     calculate the number of sectors in this inode. */
-/*  struct sector_disk *info;
-  struct idx_table *first_table, *second_table;
-  info = cache_read (inode->sector, 0, 0, NULL, FETCH);
-  first_table = cache_read (info->table_sector, 0, 0, NULL, FETCH);
-  block_sector_t last_second_table = first_table_to_num_second_table (first_table);
-  second_table = cache_read (last_second_table, 0, 0, NULL, FETCH);
-  inode->num_sector = second_table_to_num_sector (second_table); */
   
   return inode;
 }
@@ -478,6 +476,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
     block_sector_t second_idx = sector_idx % 128;
     block_sector_t sector = get_data_sector (inode, first_idx, second_idx);
     
+    /* Need to extend the file. */
     if (sector == -1)
     {
       break;

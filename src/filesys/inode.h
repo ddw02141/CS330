@@ -14,7 +14,13 @@ struct sector_disk
 {
   block_sector_t table_sector;		/* The sector of first indirect index table. */
   off_t length;				/* The length of the inode. */
-  block_sector_t unused[126];		/* Unused. */
+  block_sector_t num_sector;		/* The number of the data sectors. */
+  
+  /* The index of the last second table in first table,
+     And the index of the data sector in the second table. */
+  size_t first_index;
+  size_t second_index;
+  block_sector_t unused[123];		/* Unused. */
 };
 
 /* On-disk index table.
@@ -36,7 +42,6 @@ struct inode
   int open_cnt;				/* Number of openers. */
   bool removed;				/* True if deleted, false otherwise. */
   int deny_write_cnt;			/* 0: writes ok, >0: deny writes. */
-//  block_sector_t num_sector;		/* The number of sectors of this inode. */
 };
 
 void inode_init (void);
