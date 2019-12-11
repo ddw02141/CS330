@@ -59,10 +59,10 @@ struct cache_table_entry
 /* Function prototypes. */
 void cache_init (void);
 struct cache_table_entry *get_cache_entry (void);
-void cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, enum cache_mode);
+void *cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, enum cache_mode);
 void cache_write (struct cache_table_entry *entry);
 void cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8_t *buffer);
-void cache_inode_close (block_sector_t start, block_sector_t end);
+void cache_inode_close (block_sector_t sector);
 void cache_flush (void);
 struct cache_table_entry *cache_find_victim (void);
 struct cache_table_entry *cache_table_entry_lookup (block_sector_t sector);

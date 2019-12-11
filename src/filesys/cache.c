@@ -74,7 +74,7 @@ cache_init (void)
    First, check if given file sector is already fetched in buffer cache.
    If it is, read the content from buffer cache, not from disk,
    and it not, fetch the sector into the buffer cache. */
-void
+void *
 cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buffer, enum cache_mode mode)
 {
   /* Finding the entry should be wrapped by Mutex.
@@ -133,7 +133,7 @@ cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buff
      do not read the content into the buffer and just return.
      They call this function just to make sure that the entry is in cache. */
   if (mode != READ)
-    return;
+    return entry->cache;
   
   /* Read the full sector. */
   if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
@@ -153,6 +153,7 @@ cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buff
     sema_up (&entry->cache_evict_sema);
   entry->cnt--;
   lock_release (&entry->cnt_lock);
+  return entry->cache;
 }
 
 /* Write content of the cache into the file if the dirty boolean is set.
@@ -216,39 +217,29 @@ cache_modify (block_sector_t sector, int sector_ofs, int chunk_size, const uint8
    ## This function should be synchronized with get_cache_entry,
       especially, with the eviction routine. */
 void
-cache_inode_close (block_sector_t start, block_sector_t end)
+cache_inode_close (block_sector_t sector)
 {
   lock_acquire (&cache_mutex);
   
-  block_sector_t sector = start;
-  while (sector <= end)
-  {
-    struct cache_table_entry *entry = cache_table_entry_lookup (sector);
-    
-    if (entry == NULL)
-    {
-      sector++;
-      continue;
-    }
-    
-    /* Write back. */
-    cache_write (entry);
-    
-    /* Update the cache table entry. */
-    lock_acquire (&cache_table_lock);
-    entry->sector = -1;
-    entry->dirty = false;
-    entry->accessed = false;
-    lock_release (&cache_table_lock);
-    
-    /* Update the cache bitmap. */
-    lock_acquire (&cache_bitmap_lock);
-    bitmap_flip (cache_bitmap, entry->idx);
-    lock_release (&cache_bitmap_lock);
-    
-    /* Advance. */
-    sector++;
-  }
+  struct cache_table_entry *entry = cache_table_entry_lookup (sector);
+  
+  if (entry == NULL)
+    return;
+  
+  /* Write back. */
+  cache_write (entry);
+  
+  /* Update the cache table entry. */
+  lock_acquire (&cache_table_lock);
+  entry->sector = -1;
+  entry->dirty = false;
+  entry->accessed = false;
+  lock_release (&cache_table_lock);
+  
+  /* Update the cache bitmap. */
+  lock_acquire (&cache_bitmap_lock);
+  bitmap_flip (cache_bitmap, entry->idx);
+  lock_release (&cache_bitmap_lock);
   
   lock_release (&cache_mutex);
 }
