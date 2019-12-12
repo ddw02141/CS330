@@ -136,6 +136,9 @@ struct thread
     /* Used for timer_sleep. */
     struct list_elem telem;		/* Sleep list elem. */
     int64_t ticks;			/* Wake up ticks. */
+    
+    /* Current directory. */
+    char *current_dir;
      
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */

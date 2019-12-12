@@ -115,6 +115,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->current_dir = "/";
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -200,6 +201,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   t->parent = current_thread;
+  t->current_dir = t->parent->current_dir;
   list_push_back (&current_thread->child_list,
                   &t->celem);
   tid = t->tid = allocate_tid ();

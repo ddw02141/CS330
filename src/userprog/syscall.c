@@ -6,6 +6,7 @@
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "devices/shutdown.h"
+#include "lib/string.h"
 #include "lib/kernel/list.h"
 #include "threads/synch.h"
 #include "userprog/pagedir.h"
@@ -14,6 +15,8 @@
 #include "userprog/syscall.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
+#include "filesys/filesys.h"
+#include "filesys/directory.h"
 
 /* Function prototypes. */
 static void syscall_handler (struct intr_frame *);
@@ -28,6 +31,9 @@ static void append_exit_list (struct exited_thread *t, int exit_status);
 static bool is_page_overlap (void *addr, off_t file_size);
 static void remove_mapid_list (mapid_t mapid);
 static void append_mapid_list (mapid_t mapid);
+static bool is_relative (const char *path);
+static const char *get_final_dir (const char *path);
+static bool is_chdir_possible (char **tokens, size_t num_token);
 
 void
 syscall_init (void) 
@@ -170,15 +176,17 @@ syscall_handler (struct intr_frame *f)
     char *file_name = *((char **) arg1);
     unsigned size = *((unsigned *) arg2);
     
-    // Check if the file_name is valid.
+    /* Check if the file_name is valid. */
     if (!is_valid_ptr(file_name))
     {
       error_exit ();
     }
     else
     {
+      /* Get the absolute path for the file name. */
+      char *file_name_abs = get_final_dir (file_name);
       //lock_acquire (&filesys_lock);
-      f->eax = filesys_create (file_name, size);
+      f->eax = filesys_create (file_name_abs, size, false);
       //lock_release (&filesys_lock);
     }
   }
@@ -190,8 +198,10 @@ syscall_handler (struct intr_frame *f)
   {
     char *file_name = *((char **) arg1);
     
+    /* Get the absolute path for the file name. */
+    char *file_name_abs = get_final_dir (file_name);
     //lock_acquire (&filesys_lock);
-    f->eax = filesys_remove(file_name);
+    f->eax = filesys_remove(file_name_abs);
     //lock_release (&filesys_lock);
   }
   
@@ -209,14 +219,23 @@ syscall_handler (struct intr_frame *f)
     {
       error_exit ();
     }
+    else if (!is_valid_str(file_name))
+    {
+      f->eax = -1;
+    }
     else
     {
+      /* Get the absolute path of the file. */
+      char *file_name_abs = get_final_dir (file_name);
+      
       //lock_acquire (&filesys_lock);
-      file = find_file_by_name (file_name);
+      file = find_file_by_name (file_name_abs);
+      
       // Check if the file is already opened by this thread.
       if (file == NULL)
       {
-        new_file = filesys_open (file_name);
+        bool is_dir;
+        new_file = filesys_open (file_name_abs, &is_dir);
         // There's no such file.
         if (new_file == NULL)
         {
@@ -226,7 +245,8 @@ syscall_handler (struct intr_frame *f)
         else
         {
           new_file->fd = current_thread->max_fd;
-          new_file->file_name = file_name;
+          new_file->file_name = file_name_abs;
+          new_file->is_dir = is_dir;
           lock_acquire (&current_thread->file_list_lock);
           list_push_back (&current_thread->file_list,
                           &new_file->elem);
@@ -243,7 +263,8 @@ syscall_handler (struct intr_frame *f)
         {
           new_file = file_reopen (file);
           new_file->fd = current_thread->max_fd;
-          new_file->file_name = file_name;
+          new_file->file_name = file_name_abs;
+          new_file->is_dir = file->is_dir;
           lock_acquire (&current_thread->file_list_lock);
           list_push_back (&current_thread->file_list,
                           &new_file->elem);
@@ -490,6 +511,100 @@ syscall_handler (struct intr_frame *f)
     munmap_pages (mapid);
     remove_mapid_list (mapid);
   }
+  /**************************
+   *       SYS_CHDIR        *
+   *************************/
+  else if (syscall_num == SYS_CHDIR)
+  {
+    const char *dir = *((const char **) arg1);
+    char *target_dir = get_final_dir (dir);
+    struct thread *current_thread = thread_current ();
+    
+    /* Parse the absolute path. */
+    char *tokens[10];
+    size_t num_token = parse_file_name (target_dir, tokens);
+    
+    /* If num_token is 0, it is the root directory. */
+    if (num_token == 0)
+    {
+      strlcpy (current_thread->current_dir, "/", 2);
+      f->eax = true;
+    }
+    else
+    {
+      if (!is_chdir_possible (tokens, num_token))
+      {
+        f->eax = false;
+      }
+      else
+      {
+        strlcpy (current_thread->current_dir, target_dir, strlen (target_dir) + 1);
+        f->eax = true;
+      }
+    }
+    
+    /* Free the page for the target dir. */
+    palloc_free_page (target_dir);
+  }
+  /**************************
+   *       SYS_MKDIR        *
+   *************************/
+  else if (syscall_num == SYS_MKDIR)
+  {
+    const char *dir = *((const char **) arg1);
+    
+    /* Get the absolute path. */
+    char *target_dir = get_final_dir (dir);
+    
+    /* Try creating a directory with absolute path. */
+    f->eax = filesys_create (target_dir, 0, true);
+    
+    /* Free the page for the target dir. */
+    palloc_free_page (target_dir);
+  }
+  /**************************
+   *      SYS_READDIR       *
+   *************************/
+  else if (syscall_num == SYS_READDIR)
+  {
+    int fd = *((int *) arg1);
+    char *name = *((char **) arg2);
+    
+    /* Get the file. */
+    struct file *file = find_file_by_fd (fd);
+    
+    /* Get the directory. */
+    struct dir *target_dir = dir_open (file->inode);
+    
+    /* Read directory. */
+    f->eax = dir_readdir (target_dir, name);
+  }
+  /**************************
+   *       SYS_ISDIR        *
+   *************************/
+  else if (syscall_num == SYS_ISDIR)
+  {
+    int fd = *((int *) arg1);
+    
+    struct file *file = find_file_by_fd (fd);
+    if (file->is_dir)
+      f->eax = true;
+    else
+      f->eax = false;
+  }
+  /**************************
+   *      SYS_INUMBER       *
+   *************************/
+  else if (syscall_num == SYS_INUMBER)
+  {
+    int fd = *((int *) arg1);
+    
+    /* Get the file. */
+    struct file *file = find_file_by_fd (fd);
+    
+    /* Return the number of inode. */
+    f->eax = file->inode->sector;
+  }
   else
   {
     ;
@@ -568,11 +683,6 @@ is_valid_ptr (void *ptr)
   {
     return false;
   }
-  // Check if the given pointer points to mapped section.
-  /*else if (pagedir_get_page(pd, ptr) == NULL)
-  {
-    return false;
-  }*/
   else
   {
     return true;
@@ -773,4 +883,109 @@ munmap_all (struct thread *t)
     free (entry);
   }
   lock_release (&t->mapid_list_lock);
+}
+
+/* Check if the given path is relative path. */
+static bool
+is_relative (const char *path)
+{
+  if (*path == '/')
+    return false;
+  return true;
+}
+
+/* Get the absolute path considering
+   current directory and the given path. */
+static const char *
+get_final_dir (const char *path)
+{
+  /* If the given path is already an absolute path, return. */
+  if (!is_relative (path))
+    return path;
+  
+  struct thread *current_thread = thread_current ();
+  char *current_dir = current_thread->current_dir;
+  
+  /* Parse the given relative path. */
+  char *path_copy = palloc_get_page (0);
+  char *current_dir_copy = palloc_get_page (0);
+  char *result_path_token[10];
+  char *result_path = palloc_get_page (0);
+  char *token_path, *token_cur, *save_path, *save_cur;
+  int idx = 0;
+  
+  strlcpy (path_copy, path, PGSIZE);
+  strlcpy (current_dir_copy, current_dir, PGSIZE);
+  
+  /* First, tokenize the current directory and append it to result path token array. */
+  for (token_cur = strtok_r (current_dir_copy, "/", &save_cur); token_cur != NULL;
+       token_cur = strtok_r (NULL, "/", &save_cur))
+  {
+    result_path_token[idx] = token_cur;
+    idx++;
+  }
+  
+  /* And, then modify the result path token array using the given path. */
+  for (token_path = strtok_r (path_copy, "/", &save_path); token_path != NULL;
+       token_path = strtok_r (NULL, "/", &save_path))
+  {
+    if (!strcmp (token_path, "."))
+    {
+      continue;
+    }
+    else if (!strcmp (token_path, ".."))
+    {
+      idx--;
+      result_path_token[idx] = NULL;
+    }
+    else
+    {
+      result_path_token[idx] = token_path;
+      idx++;
+    }
+  }
+  
+  /* Concatenate the result path tokens. */
+  int trav_idx = 0;
+  strlcpy (result_path, "/", PGSIZE);
+  while (trav_idx < idx)
+  {
+    char *token = result_path_token[trav_idx];
+    strlcat (result_path, token, strlen (result_path) + strlen (token) + 1);
+    strlcat (result_path, "/", strlen (result_path) + 2);
+    trav_idx++;
+  }
+  
+  /* Free the pages. */
+  palloc_free_page (path_copy);
+  palloc_free_page (current_dir_copy);
+  
+  return result_path;
+}
+
+/* Check if chdir is possible. */
+static bool
+is_chdir_possible (char **tokens, size_t num_token)
+{
+  struct dir *dir_root = dir_open_root ();
+  struct inode *inode_cur = NULL;
+  bool is_dir;
+  
+  if (dir_root == NULL)
+    return false;
+  
+  struct dir *dir_last = find_last_directory (tokens, num_token, dir_root);
+  if (dir_last == NULL)
+  {
+    dir_close (dir_root);
+    return false;
+  }
+  
+  if (!dir_lookup (dir_last, *(tokens + num_token - 1), &inode_cur, &is_dir) || !is_dir)
+  {
+    dir_close (dir_last);
+    return false;
+  }
+  
+  return true;
 }

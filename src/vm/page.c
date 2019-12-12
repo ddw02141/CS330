@@ -250,14 +250,6 @@ restore_page (uint32_t *pd, void *uaddr)
     return false;
   }
   
-  /* If given page is already mapped in frame, it means that
-     there's an implementation fault. */
-//  if (target_entry->position == MEMORY)
-//  {
-//    //printf ("Error: A page fault with a valid page.\n");
-//    return false;
-//  }
-  
   /* Obtain a frame. */
   void *kpage = frame_obtain (target_entry->flags);
   if (kpage == NULL)
