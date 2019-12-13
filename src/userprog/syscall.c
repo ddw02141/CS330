@@ -26,6 +26,8 @@ static bool is_valid_str (char *str);
 static bool is_valid_ptr (void *ptr);
 static struct file *find_file_by_name (char *file_name);
 static struct file *find_file_by_fd (int fd);
+static struct dir *find_dir_by_name (char *dir_name);
+static struct dir *find_dir_by_fd (int fd);
 static bool find_exec_by_name (char *file_name);
 static void append_exit_list (struct exited_thread *t, int exit_status);
 static bool is_page_overlap (void *addr, off_t file_size);
@@ -34,6 +36,7 @@ static void append_mapid_list (mapid_t mapid);
 static bool is_relative (const char *path);
 static const char *get_final_dir (const char *path);
 static bool is_chdir_possible (char **tokens, size_t num_token);
+static bool is_valid_chdir (void);
 
 void
 syscall_init (void) 
@@ -181,13 +184,18 @@ syscall_handler (struct intr_frame *f)
     {
       error_exit ();
     }
+    else if (!is_valid_chdir ())
+    {
+      f->eax = false;
+    }
     else
     {
       /* Get the absolute path for the file name. */
       char *file_name_abs = get_final_dir (file_name);
-      //lock_acquire (&filesys_lock);
       f->eax = filesys_create (file_name_abs, size, false);
-      //lock_release (&filesys_lock);
+      
+      /* Free the allocated memory for the absolute path. */
+      palloc_free_page (file_name_abs);
     }
   }
   
@@ -200,9 +208,7 @@ syscall_handler (struct intr_frame *f)
     
     /* Get the absolute path for the file name. */
     char *file_name_abs = get_final_dir (file_name);
-    //lock_acquire (&filesys_lock);
     f->eax = filesys_remove(file_name_abs);
-    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -212,9 +218,10 @@ syscall_handler (struct intr_frame *f)
   {
     char *file_name = *((char **) arg1);
     struct thread *current_thread = thread_current ();
-    struct file* file, *new_file;
+    struct file *file, *new_file;
+    struct dir *dir, *new_dir;
     
-    // Check if the file_name is valid.
+    /* Check if the file_name is valid. */
     if (!is_valid_ptr(file_name))
     {
       error_exit ();
@@ -223,53 +230,74 @@ syscall_handler (struct intr_frame *f)
     {
       f->eax = -1;
     }
+    else if (!is_valid_chdir ())
+    {
+      f->eax = -1;
+    }
     else
     {
       /* Get the absolute path of the file. */
       char *file_name_abs = get_final_dir (file_name);
       
-      //lock_acquire (&filesys_lock);
+      /* Find the file or directory with given name. */
       file = find_file_by_name (file_name_abs);
+      dir = find_dir_by_name (file_name_abs);
       
-      // Check if the file is already opened by this thread.
-      if (file == NULL)
+      /* Check if the file or directory is already opened by this thread. */
+      if (file == NULL && dir == NULL)
       {
         bool is_dir;
-        new_file = filesys_open (file_name_abs, &is_dir);
-        // There's no such file.
-        if (new_file == NULL)
+        void *new = filesys_open (file_name_abs, &is_dir);
+        
+        /* There's no such file. */
+        if (new == NULL)
         {
           f->eax = -1;
         }
-        // This is the initial open.
+        /* This is the initial open. */
         else
         {
-          new_file->fd = current_thread->max_fd;
-          new_file->file_name = file_name_abs;
-          new_file->is_dir = is_dir;
-          lock_acquire (&current_thread->file_list_lock);
-          list_push_back (&current_thread->file_list,
-                          &new_file->elem);
-          current_thread->max_fd += 1;
-          lock_release (&current_thread->file_list_lock);
-          f->eax = new_file->fd;
+          /* First check if the target thing is a file or a directory. */
+          if (is_dir)
+          {
+            new_dir = new;
+            new_dir->fd = current_thread->max_fd;
+            strlcpy (new_dir->dir_name, file_name_abs, 15);
+            lock_acquire (&current_thread->dir_list_lock);
+            list_push_back (&current_thread->dir_list,
+                            &new_dir->elem);
+            current_thread->max_fd += 1;
+            lock_release (&current_thread->dir_list_lock);
+            f->eax = new_dir->fd;
+          }
+          else
+          {
+            new_file = new;
+            new_file->fd = current_thread->max_fd;
+            strlcpy (new_file->file_name, file_name_abs, 15);
+            lock_acquire (&current_thread->file_list_lock);
+            list_push_back (&current_thread->file_list,
+                            &new_file->elem);
+            current_thread->max_fd += 1;
+            lock_release (&current_thread->file_list_lock);
+            f->eax = new_file->fd;
+          }
         }
       }
-      // This file is already opened by this thread.
-      else
+      /* This file(not a directory) is already opened by this thread. */
+      else if (file != NULL)
       {
-        // Check if the file is about to removed.
+        /* Check if the file is about to be removed. */
         if (!file->inode->removed)
         {
           new_file = file_reopen (file);
           new_file->fd = current_thread->max_fd;
-          new_file->file_name = file_name_abs;
-          new_file->is_dir = file->is_dir;
+          strlcpy (new_file->file_name, file_name_abs, 15);
           lock_acquire (&current_thread->file_list_lock);
           list_push_back (&current_thread->file_list,
                           &new_file->elem);
-          lock_release (&current_thread->file_list_lock);
           current_thread->max_fd += 1;
+          lock_release (&current_thread->file_list_lock);
           f->eax = new_file->fd;
         }
         else
@@ -277,7 +305,29 @@ syscall_handler (struct intr_frame *f)
           f->eax = -1;
         }
       }
-      //lock_release (&filesys_lock);
+      /* This directory is already opened by this thread. */
+      else
+      {
+        /* Check if the directory is about to be removed. */
+        if (!dir->inode->removed)
+        {
+          new_dir = dir_reopen (dir);
+          new_file->fd = current_thread->max_fd;
+          strlcpy (new_dir->dir_name, file_name_abs, 15);
+          lock_acquire (&current_thread->dir_list_lock);
+          list_push_back (&current_thread->dir_list,
+                          &new_dir->elem);
+          current_thread->max_fd += 1;
+          lock_release (&current_thread->dir_list_lock);
+          f->eax = new_dir->fd;
+        }
+        else
+        {
+          f->eax = -1;
+        }
+      }
+      /* Free the allocated page for the absolute path. */
+      palloc_free_page (file_name_abs);
     }
   }
   
@@ -288,7 +338,6 @@ syscall_handler (struct intr_frame *f)
   {
     int fd = *((int *) arg1);
     
-    //lock_acquire (&filesys_lock);
     struct file *file = find_file_by_fd (fd);
     
     if (file == NULL)
@@ -299,7 +348,6 @@ syscall_handler (struct intr_frame *f)
     {
       f->eax = file_length (file);
     }
-    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -311,13 +359,12 @@ syscall_handler (struct intr_frame *f)
     void *buffer = *((void **) arg2);
     unsigned size = *((unsigned *) arg3);
     
-    // Check if the given buffer is valid.
+    /* Check if the given buffer is valid. */
     if (!is_valid_ptr (buffer))
     {
       error_exit ();
     }
     
-    //lock_acquire (&filesys_lock);
     if (fd == 0)
     {
       input_getc(buffer, size);
@@ -333,7 +380,6 @@ syscall_handler (struct intr_frame *f)
         f->eax = file_read (file, buffer, size);
       }
     }
-    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -345,13 +391,12 @@ syscall_handler (struct intr_frame *f)
     void *buffer = *((void **) arg2);
     unsigned size = *((unsigned *) arg3);
     
-    // Check if given buffer is valid.
+    /* Check if given buffer is valid. */
     if (!is_valid_ptr (buffer))
     {
       error_exit ();
     }
     
-    //lock_acquire (&filesys_lock);
     if (fd == 1)
     {
       putbuf (buffer, size);
@@ -359,16 +404,21 @@ syscall_handler (struct intr_frame *f)
     else
     {
       struct file *file = find_file_by_fd (fd);
-      if (file == NULL)
+      struct dir *dir = find_dir_by_fd (fd);
+      
+      if (file == NULL && dir == NULL)
       {
         f->eax = 0;
+      }
+      else if (file == NULL)
+      {
+        f->eax = -1;
       }
       else
       {
         f->eax = file_write (file, buffer, size);
       }
     }
-    //lock_release (&filesys_lock);
   }
   
   /**************************
@@ -406,6 +456,7 @@ syscall_handler (struct intr_frame *f)
     int fd = *((int *) arg1);
     
     struct file *file = find_file_by_fd (fd);
+    struct dir *dir = find_dir_by_fd (fd);
     struct thread *current_thread = thread_current ();
     
     if (file != NULL)
@@ -414,9 +465,19 @@ syscall_handler (struct intr_frame *f)
       list_remove (&file->elem);
       lock_release (&current_thread->file_list_lock);
       
-      //lock_acquire (&filesys_lock);
       file_close (file);
-      //lock_release (&filesys_lock);
+    }
+    else if (dir != NULL)
+    {
+      lock_acquire (&current_thread->dir_list_lock);
+      list_remove (&dir->elem);
+      lock_release (&current_thread->dir_list_lock);
+      
+      dir_close (dir);
+    }
+    else
+    {
+      ;
     }
   }
   
@@ -459,20 +520,16 @@ syscall_handler (struct intr_frame *f)
     }
     
     /* Reopen the file for an independent reference. */
-    //lock_acquire (&filesys_lock);
     struct file *new_file = file_reopen (file);
-    //lock_release (&filesys_lock);
     new_file->fd = current_thread->max_fd;
-    new_file->file_name = file->file_name;
+    strlcpy (new_file->file_name, file->file_name, 15);
     lock_acquire (&current_thread->file_list_lock);
     list_push_back (&current_thread->file_list, &new_file->elem);
     current_thread->max_fd += 1;
     lock_release (&current_thread->file_list_lock);
     
     /* If target file has length 0, fail. */
-    //lock_acquire (&filesys_lock);
     off_t file_size = file_length (new_file);
-    //lock_release (&filesys_lock);
     if (file_size == 0)
     {
       f->eax = -1;
@@ -571,13 +628,16 @@ syscall_handler (struct intr_frame *f)
     char *name = *((char **) arg2);
     
     /* Get the file. */
-    struct file *file = find_file_by_fd (fd);
+    struct dir *dir = find_dir_by_fd (fd);
     
     /* Get the directory. */
-    struct dir *target_dir = dir_open (file->inode);
+//    struct dir *target_dir = dir_open (dir->inode);
     
     /* Read directory. */
-    f->eax = dir_readdir (target_dir, name);
+    f->eax = dir_readdir (dir, name);
+    
+    /* Close the directory. */
+//    dir_close (target_dir);
   }
   /**************************
    *       SYS_ISDIR        *
@@ -587,7 +647,9 @@ syscall_handler (struct intr_frame *f)
     int fd = *((int *) arg1);
     
     struct file *file = find_file_by_fd (fd);
-    if (file->is_dir)
+    struct dir *dir = find_dir_by_fd (fd);
+    
+    if (file == NULL && dir != NULL)
       f->eax = true;
     else
       f->eax = false;
@@ -601,9 +663,13 @@ syscall_handler (struct intr_frame *f)
     
     /* Get the file. */
     struct file *file = find_file_by_fd (fd);
+    struct dir *dir = find_dir_by_fd (fd);
     
     /* Return the number of inode. */
-    f->eax = file->inode->sector;
+    if (file == NULL)
+      f->eax = dir->inode->sector;
+    else
+      f->eax = file->inode->sector;
   }
   else
   {
@@ -757,6 +823,62 @@ find_file_by_fd (int fd)
   return NULL;
 }
 
+/* Check if the dir with given file_name is already opened
+   by the current thread.
+   If given dir is already opened by the current thread,
+   return a pointer to the dir, and if not, return NULL. */
+static struct dir *
+find_dir_by_name (char *dir_name)
+{
+  struct thread *current_thread = thread_current ();
+  struct list *dir_list = &(current_thread->dir_list);
+  struct list_elem *e;
+
+  if (!list_empty (dir_list))
+  {
+    for (e = list_begin (dir_list);
+         e != list_end  (dir_list);
+         e = list_next (e))
+    {
+      struct dir *dir_info =
+        list_entry (e, struct dir, elem);
+      if (strcmp (dir_info->dir_name, dir_name) == 0)
+      {
+        return dir_info;
+      }
+    }
+  }
+  return NULL;
+}
+
+/* Check if the dir with given fd is already opended
+   by the current thread.
+   If given dir is already opened by the current thread,
+   return a pointer to the dir, and if not, return NULL. */
+static struct dir *
+find_dir_by_fd (int fd)
+{
+  struct thread *current_thread = thread_current ();
+  struct list *dir_list = &(current_thread->dir_list);
+  struct list_elem *e;
+
+  if (!list_empty (dir_list))
+  {
+    for (e = list_begin (dir_list);
+         e != list_end  (dir_list);
+         e = list_next (e))
+    {
+      struct dir *dir_info =
+        list_entry (e, struct dir, elem);
+      if (dir_info->fd == fd)
+      {
+        return dir_info;
+      }
+    }
+  }
+  return NULL;
+}
+
 static bool
 find_exec_by_name (char *file_name)
 {
@@ -901,8 +1023,11 @@ get_final_dir (const char *path)
 {
   /* If the given path is already an absolute path, return. */
   if (!is_relative (path))
-    return path;
-  
+  {
+    char *result_path = palloc_get_page (0);
+    strlcpy (result_path, path, PGSIZE);
+    return result_path;
+  }
   struct thread *current_thread = thread_current ();
   char *current_dir = current_thread->current_dir;
   
@@ -951,8 +1076,8 @@ get_final_dir (const char *path)
   while (trav_idx < idx)
   {
     char *token = result_path_token[trav_idx];
-    strlcat (result_path, token, strlen (result_path) + strlen (token) + 1);
-    strlcat (result_path, "/", strlen (result_path) + 2);
+    strlcat (result_path, token, PGSIZE/*strlen (result_path) + strlen (token) + 1*/);
+    strlcat (result_path, "/", PGSIZE/*strlen (result_path) + 2*/);
     trav_idx++;
   }
   
@@ -986,6 +1111,26 @@ is_chdir_possible (char **tokens, size_t num_token)
     dir_close (dir_last);
     return false;
   }
+  
+  return true;
+}
+
+/* Check if current directory of the current thread is valid.
+   It may be removed. */
+static bool
+is_valid_chdir (void)
+{
+  struct thread *current_thread = thread_current ();
+  char *chdir = get_final_dir (current_thread->current_dir);
+  
+  char *tokens[10];
+  size_t num_token = parse_file_name (chdir, tokens);
+  
+  if (num_token == 0)
+    return true;
+  
+  if (!is_chdir_possible (tokens, num_token))
+    return false;
   
   return true;
 }

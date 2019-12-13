@@ -9,11 +9,10 @@ struct file
   {
     struct list_elem elem;      /* Element in file list of thread. */
     int fd;                     /* File discriptor number. */
-    char *file_name;            /* File name. */
     struct inode *inode;        /* File's inode. */
     off_t pos;                  /* Current position. */
     bool deny_write;            /* Has file_deny_write() been called? */
-    bool is_dir;		/* True if this is directory. */
+    char *file_name;		/* File name. */
   };
 
 /* Opening and closing files. */

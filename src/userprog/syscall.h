@@ -6,6 +6,8 @@
 
 typedef int mapid_t;
 
+struct dir;
+
 /* Lock for synchronization of file system. */
 struct lock filesys_lock;
 

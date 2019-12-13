@@ -116,11 +116,14 @@ cache_read (block_sector_t sector, int sector_ofs, int chunk_size, uint8_t *buff
   else
   {
     /* If there's no reader/modifier or writer, down the semaphore. */
-    lock_acquire (&entry->cnt_lock);
-    if (entry->cnt <= 0)
-      sema_down (&entry->cache_evict_sema);
-    entry->cnt++;
-    lock_release (&entry->cnt_lock);
+    if (mode != FETCH)
+    {
+      lock_acquire (&entry->cnt_lock);
+      if (entry->cnt == 0)
+        sema_down (&entry->cache_evict_sema);
+      entry->cnt++;
+      lock_release (&entry->cnt_lock);
+    }
     
     /* Update the entry. */
     entry->accessed = true;
@@ -248,7 +251,10 @@ cache_inode_close (block_sector_t sector)
   struct cache_table_entry *entry = cache_table_entry_lookup (sector);
   
   if (entry == NULL)
+  {
+    lock_release (&cache_mutex);
     return;
+  }
   
   /* Write back. */
   cache_write (entry);
@@ -259,6 +265,7 @@ cache_inode_close (block_sector_t sector)
   entry->dirty = false;
   entry->accessed = false;
   lock_release (&cache_table_lock);
+  //printf ("cnt: %d\n", entry->cnt);
   
   /* Update the cache bitmap. */
   lock_acquire (&cache_bitmap_lock);

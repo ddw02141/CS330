@@ -553,7 +553,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Open executable file. */
   //lock_acquire (&filesys_lock);
-  file = filesys_open (file_name, false);
+  file = filesys_open (file_name, NULL);
   //lock_release (&filesys_lock);
   
   if (file == NULL) 
@@ -564,7 +564,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   
   /* If the file exists, append it to the threads's file list,
      and deny any write during execution. */
-  file->file_name = file_name;
+  strlcpy (file->file_name, file_name, 15);
   lock_acquire (&t->file_list_lock);
   list_push_back (&t->file_list, &file->elem);
   lock_release (&t->file_list_lock);

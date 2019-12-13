@@ -6,22 +6,6 @@
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 
-/* A directory. */
-struct dir
-  {
-    struct inode *inode;                /* Backing store. */
-    off_t pos;                          /* Current position. */
-  };
-
-/* A single directory entry. */
-struct dir_entry
-  {
-    block_sector_t inode_sector;        /* Sector number of header. */
-    char name[NAME_MAX + 1];            /* Null terminated file name. */
-    bool in_use;                        /* In use or free? */
-    bool is_dir;			/* True if this is not a file but a dir. */
-  };
-
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
 bool
@@ -40,6 +24,7 @@ dir_open (struct inode *inode)
     {
       dir->inode = inode;
       dir->pos = 0;
+      dir->dir_name = calloc (1, 15);
       return dir;
     }
   else
@@ -73,6 +58,7 @@ dir_close (struct dir *dir)
   if (dir != NULL)
     {
       inode_close (dir->inode);
+      free (dir->dir_name);
       free (dir);
     }
 }
@@ -128,7 +114,8 @@ dir_lookup (const struct dir *dir, const char *name,
   if (lookup (dir, name, &e, NULL))
   {
     *inode = inode_open (e.inode_sector);
-    *is_dir = e.is_dir;
+    if (is_dir != NULL)
+      *is_dir = e.is_dir;
   }
   else
     *inode = NULL;
@@ -144,7 +131,7 @@ dir_lookup (const struct dir *dir, const char *name,
    Fails if NAME is invalid (i.e. too long) or a disk or memory
    error occurs. */
 bool
-dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is_dir)
+dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is_dir, off_t initial_size)
 {
   struct dir_entry e;
   off_t ofs;
@@ -179,7 +166,12 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector, bool is
   e.inode_sector = inode_sector;
   e.is_dir = is_dir;
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
-
+  
+  /* If this file is a directory actually,
+     create the directory. */
+  if (is_dir)
+    dir_create (inode_sector, initial_size);
+  
  done:
   return success;
 }
@@ -239,4 +231,22 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
         } 
     }
   return false;
+}
+
+/* Check if the given directory is empty or not. */
+bool
+dir_is_empty (struct dir *dir)
+{
+  struct dir_entry e;
+  off_t pos = 0;
+  
+  while (inode_read_at (dir->inode, &e, sizeof e, pos) == sizeof e)
+  {
+    pos += sizeof e;
+    if (e.in_use)
+    {
+      return false;
+    }
+  }
+  return true;
 }

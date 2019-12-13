@@ -101,6 +101,8 @@ struct thread
     
     struct list file_list;              /* File list opened by this thread. */
     struct lock file_list_lock;         /* Synchronize file list. */
+    struct list dir_list;		/* Dir list opened by this thread. */
+    struct lock dir_list_lock;		/* Synchronize dir list. */
     int max_fd;                         /* Max fd of this thread. */
     
     /* Used for exec syscall. */
@@ -138,7 +140,7 @@ struct thread
     int64_t ticks;			/* Wake up ticks. */
     
     /* Current directory. */
-    char *current_dir;
+    char *current_dir;			/* The current directory. Need memory allocation. */
      
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
@@ -150,6 +152,7 @@ struct thread
 extern bool thread_mlfqs;
 
 void thread_init (void);
+void initial_thread_set_dir (void);
 void thread_start (void);
 
 void thread_tick (void);
