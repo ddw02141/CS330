@@ -12,6 +12,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "lib/kernel/list.h"
+#include "lib/string.h"
 #include "userprog/syscall.h"
 #include "vm/frame.h"
 #include "vm/page.h"
@@ -115,7 +116,19 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
-  initial_thread->current_dir = "/";
+  initial_thread->parent = NULL;
+}
+
+/* Set the current directory of the initial thread.
+   This procedure is neccessary because children of the
+   initial thread inherit the current directory of
+   the initial thread. */
+void
+initial_thread_set_dir (void)
+{
+  struct thread *initial_thread = running_thread ();
+  initial_thread->current_dir = calloc (1, 15);
+  strlcpy (initial_thread->current_dir, "/", 15);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -201,7 +214,8 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   t->parent = current_thread;
-  t->current_dir = t->parent->current_dir;
+  t->current_dir = calloc (1, 15);
+  strlcpy (t->current_dir, t->parent->current_dir, 15);
   list_push_back (&current_thread->child_list,
                   &t->celem);
   tid = t->tid = allocate_tid ();
@@ -488,6 +502,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   list_init (&t->file_list);
   lock_init (&t->file_list_lock);
+  list_init (&t->dir_list);
+  lock_init (&t->dir_list_lock);
   t->max_fd = 2;
   t->parent = NULL;
   sema_init (&t->exec_sema, 0);

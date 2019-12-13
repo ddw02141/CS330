@@ -79,7 +79,7 @@ filesys_create (const char *name, off_t initial_size, bool is_dir)
   
   bool success = (free_map_allocate (1, &inode_sector)
                   && inode_create (inode_sector, initial_size)
-                  && dir_add (dir_last, tokens[num_token - 1], inode_sector, is_dir));
+                  && dir_add (dir_last, tokens[num_token - 1], inode_sector, is_dir, initial_size));
   if (!success && inode_sector != 0)
     free_map_release (inode_sector, 1);
   dir_close (dir_last);
@@ -114,9 +114,8 @@ filesys_open (const char *name, bool *is_dir)
   /* If the target file is the root directory itself, open. */
   if (num_token == 0)
   {
-    struct file *file = file_open (dir_get_inode (dir_root));
-    dir_close (dir_root);
-    return file;
+    *is_dir = true;
+    return dir_root;
   }
   
   /* Look up the subdirectories. */
@@ -125,10 +124,23 @@ filesys_open (const char *name, bool *is_dir)
     return NULL;
   
   /* Now look up for the file, or a directory with given name. */
-  dir_lookup (dir_last, tokens[num_token - 1], &inode, &is_dir);
-  dir_close (dir_last);
-
-  return file_open (inode);
+  if (!dir_lookup (dir_last, tokens[num_token - 1], &inode, is_dir))
+  {
+    return NULL;
+  }
+  else
+  {
+    if (is_dir != NULL && *is_dir)
+    {
+      dir_close (dir_last);
+      return dir_open (inode);
+    }
+    else
+    {
+      dir_close (dir_last);
+      return file_open (inode);
+    }
+  }
 }
 
 /* Deletes the file named NAME.
@@ -161,6 +173,25 @@ filesys_remove (const char *name)
   struct dir *dir_last = find_last_directory (tokens, num_token, dir_root);
   if (dir_last == NULL)
     return false;
+  
+  /* Now look up for the file, or a directory with given name.
+     Check if it is a directory. */
+  struct inode *inode = NULL;
+  bool is_dir;
+  if (dir_lookup (dir_last, tokens[num_token - 1], &inode, &is_dir) && is_dir)
+  {
+    /* If it is a directory, open. */
+    struct dir *dir_target = dir_open (inode);
+    
+    /* If the directory is not empty, reject. */
+    if (!dir_is_empty (dir_target))
+    {
+      dir_close (dir_last);
+      dir_close (dir_target);
+      return false;
+    }
+    dir_close (dir_target);
+  }
   
   /* Now reomve the file in current directory. */
   bool success = dir_remove (dir_last, tokens[num_token - 1]);

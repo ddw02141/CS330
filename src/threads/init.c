@@ -102,7 +102,10 @@ main (void)
   palloc_init (user_page_limit);
   malloc_init ();
   paging_init ();
-
+  
+  /* Initialize the current directory of the initial thread. */
+  initial_thread_set_dir ();
+  
   /* Initialize frame table, supplementary page table,
      and swapping related data structures after malloc is initialized. */
   hash_init (&frame_table, frame_hash_func, frame_less_func, NULL);

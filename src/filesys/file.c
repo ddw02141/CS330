@@ -2,6 +2,7 @@
 #include <debug.h>
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "lib/string.h"
 
 /* Opens a file for the given INODE, of which it takes ownership,
    and returns the new file.  Returns a null pointer if an
@@ -15,6 +16,7 @@ file_open (struct inode *inode)
       file->inode = inode;
       file->pos = 0;
       file->deny_write = false;
+      file->file_name = calloc (1, 15);
       return file;
     }
   else
@@ -41,6 +43,7 @@ file_close (struct file *file)
     {
       file_allow_write (file);
       inode_close (file->inode);
+      free (file->file_name);
       free (file); 
     }
 }
