@@ -94,12 +94,13 @@ start_process (void *file_name_)
   {
     parent->load_success = false;
     palloc_free_page (file_name);
+    sema_up (&parent->exec_sema);
     error_exit ();
   }
   
   /* If load succeed, inform to parent. */
   parent->load_success = true;
-  //sema_up (&parent->exec_sema);
+  sema_up (&parent->exec_sema);
   
   /* Push parsed arguments into the user stack. */
   void *esp = if_.esp;
@@ -278,12 +279,14 @@ process_exit (void)
   
   /************************************************/
   
+  free (cur->current_dir);
+  
   /************************************************/
   /* This thread is a child thread of one thread. */
   /************************************************/
   
   /* If a exec fails to load, wake up its parent. */
-  sema_up (&parent->exec_sema);
+  // sema_up (&parent->exec_sema);
   
   /************************************************/
   
@@ -564,7 +567,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   
   /* If the file exists, append it to the threads's file list,
      and deny any write during execution. */
-  strlcpy (file->file_name, file_name, 15);
+  file->file_name = calloc(1, strlen(file_name) + 1);
+
+  strlcpy (file->file_name, file_name, strlen(file_name) + 1);
   lock_acquire (&t->file_list_lock);
   list_push_back (&t->file_list, &file->elem);
   lock_release (&t->file_list_lock);

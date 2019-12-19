@@ -16,7 +16,7 @@ file_open (struct inode *inode)
       file->inode = inode;
       file->pos = 0;
       file->deny_write = false;
-      file->file_name = calloc (1, 15);
+      // file->file_name = calloc (1, 15);
       return file;
     }
   else

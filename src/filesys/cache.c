@@ -296,6 +296,18 @@ cache_flush (void)
   lock_release (&cache_mutex);
 }
 
+void
+cache_flush_entry (struct cache_table_entry*entry)
+{
+  ASSERT(entry!=NULL);
+  
+  if(entry->dirty){
+    block_write(fs_device, entry->sector, entry->cache);
+    entry->dirty = false;
+  }
+  
+}
+
 /* Check if there's an empty entry in buffer cache.
    If there is, return a pointer to the cache table entry,
    and if not, evict one, and return a pointer to the cache table entry. */
@@ -353,12 +365,12 @@ struct cache_table_entry *
 cache_find_victim (void)
 {
   struct hash_iterator i;
-  
+  struct cache_table_entry *entry;
   /* The first iteration. */
   hash_first (&i, &cache_table);
   while (hash_next (&i))
   {
-    struct cache_table_entry *entry = hash_entry (hash_cur (&i), struct cache_table_entry, hash_elem);
+    entry = hash_entry (hash_cur (&i), struct cache_table_entry, hash_elem);
     if (entry->accessed == false && entry->cnt == 0)
     {
       entry->accessed = true;
@@ -373,19 +385,23 @@ cache_find_victim (void)
   hash_first (&i, &cache_table);
   while (hash_next (&i))
   {
-    struct cache_table_entry *entry = hash_entry (hash_cur (&i), struct cache_table_entry, hash_elem);
+    entry = hash_entry (hash_cur (&i), struct cache_table_entry, hash_elem);
     if (entry->accessed == false && entry->cnt == 0)
     {
       entry->accessed = true;
       return entry;
     }
     else
-      entry->accessed = false;
+      // entry->accessed = false;
+      break;
   }
   
   /* Control cannot reach here. */
-  printf ("Fatal: cache_find_victim failed.\n");
-  return NULL;
+  if(entry->dirty)
+    cache_flush_entry(entry);
+  return entry;
+  //printf ("Fatal: cache_find_victim failed.\n");
+  //return NULL;
 }
 
 /* Check if given file is already fetched in buffer.

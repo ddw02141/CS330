@@ -24,7 +24,8 @@ dir_open (struct inode *inode)
     {
       dir->inode = inode;
       dir->pos = 0;
-      dir->dir_name = calloc (1, 15);
+      // dir->dir_name = calloc (1, 15);
+      // dir->dir_name = "";
       return dir;
     }
   else
@@ -58,7 +59,7 @@ dir_close (struct dir *dir)
   if (dir != NULL)
     {
       inode_close (dir->inode);
-      free (dir->dir_name);
+      // free (dir->dir_name);
       free (dir);
     }
 }
@@ -226,7 +227,9 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
       dir->pos += sizeof e;
       if (e.in_use)
         {
+          
           strlcpy (name, e.name, NAME_MAX + 1);
+          // strlcat (name, e.name, NAME_MAX + 1);
           return true;
         } 
     }
@@ -250,3 +253,5 @@ dir_is_empty (struct dir *dir)
   }
   return true;
 }
+
+

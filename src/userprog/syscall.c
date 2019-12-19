@@ -209,6 +209,8 @@ syscall_handler (struct intr_frame *f)
     /* Get the absolute path for the file name. */
     char *file_name_abs = get_final_dir (file_name);
     f->eax = filesys_remove(file_name_abs);
+
+    palloc_free_page (file_name_abs);
   }
   
   /**************************
@@ -262,7 +264,10 @@ syscall_handler (struct intr_frame *f)
           {
             new_dir = new;
             new_dir->fd = current_thread->max_fd;
-            strlcpy (new_dir->dir_name, file_name_abs, 15);
+            // printf("OPEN DIR: %s %d\n", file_name, new_dir->fd);
+            // printf("DIR NAME : %s\n", file_name_abs);
+            new_dir->dir_name = calloc(1, strlen(file_name_abs) + 1);
+            strlcpy (new_dir->dir_name, file_name_abs, strlen(file_name_abs) + 1);
             lock_acquire (&current_thread->dir_list_lock);
             list_push_back (&current_thread->dir_list,
                             &new_dir->elem);
@@ -274,7 +279,9 @@ syscall_handler (struct intr_frame *f)
           {
             new_file = new;
             new_file->fd = current_thread->max_fd;
-            strlcpy (new_file->file_name, file_name_abs, 15);
+            //printf("OPEN FILE: %s %d\n", file_name, new_file->fd);
+            new_file->file_name = calloc(1, strlen(file_name_abs) + 1);
+            strlcpy (new_file->file_name, file_name_abs, strlen(file_name_abs)+ 1);
             lock_acquire (&current_thread->file_list_lock);
             list_push_back (&current_thread->file_list,
                             &new_file->elem);
@@ -292,7 +299,8 @@ syscall_handler (struct intr_frame *f)
         {
           new_file = file_reopen (file);
           new_file->fd = current_thread->max_fd;
-          strlcpy (new_file->file_name, file_name_abs, 15);
+          new_file->file_name = calloc(1, strlen(file_name_abs) + 1);
+          strlcpy (new_file->file_name, file_name_abs, strlen(file_name_abs)+ 1);
           lock_acquire (&current_thread->file_list_lock);
           list_push_back (&current_thread->file_list,
                           &new_file->elem);
@@ -313,7 +321,8 @@ syscall_handler (struct intr_frame *f)
         {
           new_dir = dir_reopen (dir);
           new_file->fd = current_thread->max_fd;
-          strlcpy (new_dir->dir_name, file_name_abs, 15);
+          new_dir->dir_name = calloc(1, strlen(file_name_abs) + 1);
+          strlcpy (new_dir->dir_name, file_name_abs, strlen(file_name_abs)+ 1);
           lock_acquire (&current_thread->dir_list_lock);
           list_push_back (&current_thread->dir_list,
                           &new_dir->elem);
@@ -522,7 +531,8 @@ syscall_handler (struct intr_frame *f)
     /* Reopen the file for an independent reference. */
     struct file *new_file = file_reopen (file);
     new_file->fd = current_thread->max_fd;
-    strlcpy (new_file->file_name, file->file_name, 15);
+    new_file->file_name = calloc(1, strlen(file->file_name) + 1);
+    strlcpy (new_file->file_name, file->file_name, strlen(file->file_name) + 1);
     lock_acquire (&current_thread->file_list_lock);
     list_push_back (&current_thread->file_list, &new_file->elem);
     current_thread->max_fd += 1;
@@ -575,6 +585,10 @@ syscall_handler (struct intr_frame *f)
   {
     const char *dir = *((const char **) arg1);
     char *target_dir = get_final_dir (dir);
+    //char *target_dir_copy = palloc_get_page(0);
+
+    //strlcpy(target_dir_copy, target_dir, PGSIZE);
+
     struct thread *current_thread = thread_current ();
     
     /* Parse the absolute path. */
@@ -598,6 +612,7 @@ syscall_handler (struct intr_frame *f)
         strlcpy (current_thread->current_dir, target_dir, strlen (target_dir) + 1);
         f->eax = true;
       }
+      //palloc_free_page(target_dir_copy);
     }
     
     /* Free the page for the target dir. */
@@ -628,13 +643,24 @@ syscall_handler (struct intr_frame *f)
     char *name = *((char **) arg2);
     
     /* Get the file. */
+    //printf("name : %s\n", name);
     struct dir *dir = find_dir_by_fd (fd);
+    //printf("dir_name : %s\n", dir->dir_name);
     
     /* Get the directory. */
 //    struct dir *target_dir = dir_open (dir->inode);
     
     /* Read directory. */
-    f->eax = dir_readdir (dir, name);
+    // printf("current_dir : %s\n", thread_current()->current_dir);
+    bool readdir_success = dir_readdir (dir, name);
+    // printf("dir : %s\n", dir->dir_name);
+    // printf("name[0] : %s\n", name[0]);
+    // printf("name[1] : %s\n", name[1]);
+    // printf("name[2] : %s\n", name[2]);
+    // printf("readdir_success : %d\n", readdir_success);
+    f->eax = readdir_success;
+    //printf("name after readdir : %s\n", name);
+    
     
     /* Close the directory. */
 //    dir_close (target_dir);
@@ -764,6 +790,8 @@ error_exit (void)
   printf ("%s: exit(%d)\n", current_thread->name, -1);
   current_thread->exit_status = -1;
   sema_up(&current_thread->wait_sema);
+  //sema_up (&current_thread->parent->exec_sema);
+
   thread_exit ();
 }
 
@@ -858,6 +886,7 @@ find_dir_by_name (char *dir_name)
 static struct dir *
 find_dir_by_fd (int fd)
 {
+  //printf("find_dir_by_fd : %d\n", fd);
   struct thread *current_thread = thread_current ();
   struct list *dir_list = &(current_thread->dir_list);
   struct list_elem *e;
@@ -870,8 +899,10 @@ find_dir_by_fd (int fd)
     {
       struct dir *dir_info =
         list_entry (e, struct dir, elem);
+      
       if (dir_info->fd == fd)
       {
+        //printf("%s\n", dir_info->dir_name);
         return dir_info;
       }
     }
@@ -1018,36 +1049,35 @@ is_relative (const char *path)
 
 /* Get the absolute path considering
    current directory and the given path. */
-static const char *
-get_final_dir (const char *path)
-{
-  /* If the given path is already an absolute path, return. */
-  if (!is_relative (path))
-  {
-    char *result_path = palloc_get_page (0);
-    strlcpy (result_path, path, PGSIZE);
-    return result_path;
-  }
+static char *
+parse(char *path, bool is_relative){
+  
   struct thread *current_thread = thread_current ();
   char *current_dir = current_thread->current_dir;
-  
-  /* Parse the given relative path. */
-  char *path_copy = palloc_get_page (0);
-  char *current_dir_copy = palloc_get_page (0);
-  char *result_path_token[10];
+
   char *result_path = palloc_get_page (0);
+  char *path_copy = palloc_get_page (0); 
+  char *current_dir_copy = NULL; 
+  char *result_path_token[10];
   char *token_path, *token_cur, *save_path, *save_cur;
   int idx = 0;
-  
-  strlcpy (path_copy, path, PGSIZE);
-  strlcpy (current_dir_copy, current_dir, PGSIZE);
-  
-  /* First, tokenize the current directory and append it to result path token array. */
-  for (token_cur = strtok_r (current_dir_copy, "/", &save_cur); token_cur != NULL;
-       token_cur = strtok_r (NULL, "/", &save_cur))
-  {
-    result_path_token[idx] = token_cur;
-    idx++;
+
+  if (is_relative){
+    current_dir_copy = palloc_get_page (0);
+    
+    strlcpy (path_copy, path, PGSIZE);
+    strlcpy (current_dir_copy, current_dir, PGSIZE);
+    
+    /* First, tokenize the current directory and append it to result path token array. */
+    for (token_cur = strtok_r (current_dir_copy, "/", &save_cur); token_cur != NULL;
+        token_cur = strtok_r (NULL, "/", &save_cur))
+    {
+      result_path_token[idx] = token_cur;
+      idx++;
+    }
+  }
+  else{
+    strlcpy (path_copy, path, PGSIZE);
   }
   
   /* And, then modify the result path token array using the given path. */
@@ -1083,7 +1113,84 @@ get_final_dir (const char *path)
   
   /* Free the pages. */
   palloc_free_page (path_copy);
-  palloc_free_page (current_dir_copy);
+  if (current_dir_copy!=NULL)
+    palloc_free_page (current_dir_copy);
+  
+  return result_path;
+}
+
+static const char *
+get_final_dir (const char *path)
+{
+  char *result_path;
+  /* If the given path is already an absolute path, return. */
+  if (!is_relative (path))
+  {
+    // char *result_path = palloc_get_page (0);
+    result_path = parse(path, false);
+    // strlcpy (result_path, path, PGSIZE);
+    // return result_path;
+  }
+  else{
+    result_path = parse(path, true);
+  }
+  // struct thread *current_thread = thread_current ();
+  // char *current_dir = current_thread->current_dir;
+  
+  /* Parse the given relative path. */
+  
+  // char *path_copy = palloc_get_page (0);
+  // char *current_dir_copy = palloc_get_page (0);
+  // char *result_path_token[10];
+  // char *result_path = palloc_get_page (0);
+  // char *token_path, *token_cur, *save_path, *save_cur;
+  // int idx = 0;
+  
+  // strlcpy (path_copy, path, PGSIZE);
+  // strlcpy (current_dir_copy, current_dir, PGSIZE);
+  
+  // /* First, tokenize the current directory and append it to result path token array. */
+  // for (token_cur = strtok_r (current_dir_copy, "/", &save_cur); token_cur != NULL;
+  //      token_cur = strtok_r (NULL, "/", &save_cur))
+  // {
+  //   result_path_token[idx] = token_cur;
+  //   idx++;
+  // }
+  
+  // /* And, then modify the result path token array using the given path. */
+  // for (token_path = strtok_r (path_copy, "/", &save_path); token_path != NULL;
+  //      token_path = strtok_r (NULL, "/", &save_path))
+  // {
+  //   if (!strcmp (token_path, "."))
+  //   {
+  //     continue;
+  //   }
+  //   else if (!strcmp (token_path, ".."))
+  //   {
+  //     idx--;
+  //     result_path_token[idx] = NULL;
+  //   }
+  //   else
+  //   {
+  //     result_path_token[idx] = token_path;
+  //     idx++;
+  //   }
+  // }
+  
+  // /* Concatenate the result path tokens. */
+  // int trav_idx = 0;
+  // strlcpy (result_path, "/", PGSIZE);
+  // while (trav_idx < idx)
+  // {
+  //   char *token = result_path_token[trav_idx];
+  //   strlcat (result_path, token, PGSIZE/*strlen (result_path) + strlen (token) + 1*/);
+  //   strlcat (result_path, "/", PGSIZE/*strlen (result_path) + 2*/);
+  //   trav_idx++;
+  // }
+  
+  // /* Free the pages. */
+  // palloc_free_page (path_copy);
+  // palloc_free_page (current_dir_copy);
   
   return result_path;
 }
