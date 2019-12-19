@@ -7,6 +7,13 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "threads/vaddr.h"
+#include "threads/palloc.h"
+#include "threads/malloc.h"
+#include "lib/string.h"
+#include "vm/page.h"
+
+// void free_tokens(char **tokens);
 
 /* Partition that contains the file system. */
 struct block *fs_device;
@@ -51,32 +58,52 @@ filesys_done (void)
 bool
 filesys_create (const char *name, off_t initial_size, bool is_dir) 
 {
+  // printf("filesys_create : %s\n", name);
+  // char *name_copy = palloc_get_page(0);
+  // strlcpy(name_copy, name, PGSIZE);
+  char *name_copy = calloc(1, strlen(name) + 1);
+  strlcpy(name_copy, name, strlen(name) + 1);
+
   block_sector_t inode_sector = 0;
   struct dir *dir_root = dir_open_root ();
   struct inode *inode;
   bool dir;
   
-  if (dir_root == NULL)
+  if (dir_root == NULL){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
+  }
+    
   
   /* Parse the name. */
-  char *tokens[10];
-  size_t num_token = parse_file_name (name, tokens);
+  char * tokens[20];
+  // char tokens[20][strlen(name)];
+  size_t num_token = parse_file_name (name, name_copy, tokens);
   
   /* The root already exists. */
-  if (num_token == 0)
+  if (num_token == 0){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
+  }
   
   /* Look up the subdirectories. */
   struct dir *dir_last = find_last_directory (tokens, num_token, dir_root);
-  if (dir_last == NULL)
+  if (dir_last == NULL){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
-  
+  }
   /* Now check if there already exists a file with given name,
      and create a new file if there's no such file. */
-  if (dir_lookup (dir_last, tokens[num_token - 1], &inode, &dir))
+  if (dir_lookup (dir_last, tokens[num_token - 1], &inode, &dir)){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
-  
+  }
+    
+  // printf("tokens[num_token - 1] : %s\n", tokens[num_token - 1]);
   bool success = (free_map_allocate (1, &inode_sector)
                   && inode_create (inode_sector, initial_size)
                   && dir_add (dir_last, tokens[num_token - 1], inode_sector, is_dir, initial_size));
@@ -84,6 +111,8 @@ filesys_create (const char *name, off_t initial_size, bool is_dir)
     free_map_release (inode_sector, 1);
   dir_close (dir_last);
 
+  // palloc_free_page(name_copy);
+  free(name_copy);
   return success;
 }
 
@@ -100,32 +129,58 @@ filesys_create (const char *name, off_t initial_size, bool is_dir)
 struct file *
 filesys_open (const char *name, bool *is_dir)
 {
+  // printf("filesys_open : %s\n", name);
+
+  // char *name_copy = palloc_get_page(0);
+  // strlcpy(name_copy, name, PGSIZE);
+  char *name_copy = calloc(1, strlen(name) + 1);
+  strlcpy(name_copy, name, strlen(name) + 1);
+
+
   struct dir *dir_root = dir_open_root ();
   struct inode *inode = NULL;
   struct file *file;
   
-  if (dir_root == NULL)
+  if (dir_root == NULL){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return NULL;
+  }
+    
   
   /* Parse the name. */
-  char *tokens[10];
-  size_t num_token = parse_file_name (name, tokens);
+  if (strlen(name)==0) {
+    // palloc_free_page(name_copy);
+    free(name_copy);
+    return NULL;
+  }
+  char *tokens[20];
+  // char tokens[20][strlen(name)+1];
+  size_t num_token = parse_file_name (name, name_copy, tokens);
   
   /* If the target file is the root directory itself, open. */
   if (num_token == 0)
   {
     *is_dir = true;
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return dir_root;
   }
   
   /* Look up the subdirectories. */
   struct dir *dir_last = find_last_directory (tokens, num_token, dir_root);
-  if (dir_last == NULL)
+  if (dir_last == NULL){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return NULL;
+  }
+    
   
   /* Now look up for the file, or a directory with given name. */
   if (!dir_lookup (dir_last, tokens[num_token - 1], &inode, is_dir))
   {
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return NULL;
   }
   else
@@ -133,11 +188,15 @@ filesys_open (const char *name, bool *is_dir)
     if (is_dir != NULL && *is_dir)
     {
       dir_close (dir_last);
+      // palloc_free_page(name_copy);
+      free(name_copy);
       return dir_open (inode);
     }
     else
     {
       dir_close (dir_last);
+      // palloc_free_page(name_copy);
+      free(name_copy);
       return file_open (inode);
     }
   }
@@ -153,26 +212,41 @@ filesys_open (const char *name, bool *is_dir)
 bool
 filesys_remove (const char *name) 
 {
+  // char *name_copy = palloc_get_page(0);
+  // strlcpy(name_copy, name, PGSIZE);
+  char *name_copy = calloc(1, strlen(name) + 1);
+  strlcpy(name_copy, name, strlen(name) + 1);
+
   struct dir *dir_root = dir_open_root ();
   
-  if (dir_root == NULL)
+  if (dir_root == NULL){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
+  }
+    
   
   /* Parse the name. */
-  char *tokens[10];
-  size_t num_token = parse_file_name (name, tokens);
+  char *tokens[20];
+  // char tokens[20][strlen(name)];
+  size_t num_token = parse_file_name (name, name_copy, tokens);
   
   /* If the target file is the root directory itself, reject. */
   if (num_token == 0)
   {
     dir_close (dir_root);
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
   }
   
   /* Look up the subdirectories. */
   struct dir *dir_last = find_last_directory (tokens, num_token, dir_root);
-  if (dir_last == NULL)
+  if (dir_last == NULL){
+    // palloc_free_page(name_copy);
+    free(name_copy);
     return false;
+  }
   
   /* Now look up for the file, or a directory with given name.
      Check if it is a directory. */
@@ -188,6 +262,8 @@ filesys_remove (const char *name)
     {
       dir_close (dir_last);
       dir_close (dir_target);
+      // palloc_free_page(name_copy);
+      free(name_copy);
       return false;
     }
     dir_close (dir_target);
@@ -196,7 +272,9 @@ filesys_remove (const char *name)
   /* Now reomve the file in current directory. */
   bool success = dir_remove (dir_last, tokens[num_token - 1]);
   dir_close (dir_last); 
-  
+
+  // palloc_free_page(name_copy);
+  free(name_copy);
   return success;
 }
 
@@ -215,18 +293,28 @@ do_format (void)
 /* Parse the name.
    Store the tokens in res,
    and return the number of tokens. */
+
 size_t
-parse_file_name (char *name, char **res_ptr)
+parse_file_name (char *name, char *name_copy, char **res_ptr)
 {
   char *token, *save_ptr;
   size_t num_token = 0;
+  // char *name_copy = (char *)malloc( (strlen(name) + 1) );
+  // memcpy(name_copy, name, sizeof(char) * ((int)strlen(name) + 1));
+  // memcpy(name_copy, name, strlen(name) + 1);
+  // char *name_copy = palloc_get_page(0);
+  // strlcpy(name_copy, name, strlen(name) + 1);
   
-  for (token = strtok_r (name, "/", &save_ptr); token != NULL;
+  for (token = strtok_r (name_copy, "/", &save_ptr); token != NULL;
        token = strtok_r (NULL, "/", &save_ptr))
   {
     *(res_ptr + num_token) = token;
     num_token++;
   }
+
+  // free(name_copy);
+  // palloc_free_page(name_copy);
+
   return num_token;
 }
 
@@ -248,14 +336,17 @@ find_last_directory (char **tokens, size_t num_token, struct dir *dir_root)
   {
     /* Check if there's a directory we are finding.
        If not, return NULL. */
-    if (!dir_lookup (dir_cur, *(tokens + token_idx), &inode_cur, &is_dir) || !is_dir)
-    {
-      dir_close (dir_cur);
-      return NULL;
-    }
+    bool dir_lookup_suceess = dir_lookup (dir_cur, *(tokens + token_idx), &inode_cur, &is_dir) || !is_dir;
+    dir_close (dir_cur);
+    if (!dir_lookup_suceess) return NULL;
+    // if (!dir_lookup (dir_cur, *(tokens + token_idx), &inode_cur, &is_dir) || !is_dir)
+    // {
+    //   dir_close (dir_cur);
+    //   return NULL;
+    // }
     
     /* Close the current directory, and open deeper directory. */
-    dir_close (dir_cur);
+    // dir_close (dir_cur);
     dir_cur = dir_open (inode_cur);
     
     /* If there's no such directory, return NULL. */
@@ -265,7 +356,17 @@ find_last_directory (char **tokens, size_t num_token, struct dir *dir_root)
     /* Advance. */
     token_idx++;
   }
-  
+
+
   /* Now return the dir_cur. */
   return dir_cur;
 }
+
+// void free_tokens(char **tokens){
+  
+//   void* addr = pg_round_down(*tokens);
+//   // printf("addr : %x\n", addr); addr : c0119000
+//   palloc_free_page(addr);
+//   return;
+
+// }

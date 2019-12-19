@@ -13,6 +13,7 @@
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+#include "threads/palloc.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
 #include "filesys/filesys.h"
@@ -268,6 +269,7 @@ syscall_handler (struct intr_frame *f)
             // printf("DIR NAME : %s\n", file_name_abs);
             new_dir->dir_name = calloc(1, strlen(file_name_abs) + 1);
             strlcpy (new_dir->dir_name, file_name_abs, strlen(file_name_abs) + 1);
+
             lock_acquire (&current_thread->dir_list_lock);
             list_push_back (&current_thread->dir_list,
                             &new_dir->elem);
@@ -282,6 +284,7 @@ syscall_handler (struct intr_frame *f)
             //printf("OPEN FILE: %s %d\n", file_name, new_file->fd);
             new_file->file_name = calloc(1, strlen(file_name_abs) + 1);
             strlcpy (new_file->file_name, file_name_abs, strlen(file_name_abs)+ 1);
+
             lock_acquire (&current_thread->file_list_lock);
             list_push_back (&current_thread->file_list,
                             &new_file->elem);
@@ -301,6 +304,7 @@ syscall_handler (struct intr_frame *f)
           new_file->fd = current_thread->max_fd;
           new_file->file_name = calloc(1, strlen(file_name_abs) + 1);
           strlcpy (new_file->file_name, file_name_abs, strlen(file_name_abs)+ 1);
+
           lock_acquire (&current_thread->file_list_lock);
           list_push_back (&current_thread->file_list,
                           &new_file->elem);
@@ -323,6 +327,7 @@ syscall_handler (struct intr_frame *f)
           new_file->fd = current_thread->max_fd;
           new_dir->dir_name = calloc(1, strlen(file_name_abs) + 1);
           strlcpy (new_dir->dir_name, file_name_abs, strlen(file_name_abs)+ 1);
+
           lock_acquire (&current_thread->dir_list_lock);
           list_push_back (&current_thread->dir_list,
                           &new_dir->elem);
@@ -585,6 +590,12 @@ syscall_handler (struct intr_frame *f)
   {
     const char *dir = *((const char **) arg1);
     char *target_dir = get_final_dir (dir);
+
+    char *target_dir_copy = calloc(1, strlen(target_dir) + 1);
+    strlcpy(target_dir_copy, target_dir, strlen(target_dir) + 1);
+
+    // char *target_dir_copy = palloc_get_page(0);
+    // strlcpy(target_dir_copy, target_dir, PGSIZE);
     //char *target_dir_copy = palloc_get_page(0);
 
     //strlcpy(target_dir_copy, target_dir, PGSIZE);
@@ -593,7 +604,8 @@ syscall_handler (struct intr_frame *f)
     
     /* Parse the absolute path. */
     char *tokens[10];
-    size_t num_token = parse_file_name (target_dir, tokens);
+    
+    size_t num_token = parse_file_name (target_dir, target_dir_copy, tokens);
     
     /* If num_token is 0, it is the root directory. */
     if (num_token == 0)
@@ -609,14 +621,17 @@ syscall_handler (struct intr_frame *f)
       }
       else
       {
-        strlcpy (current_thread->current_dir, target_dir, strlen (target_dir) + 1);
+        strlcpy (current_thread->current_dir, target_dir, strlen(target_dir) + 1);
         f->eax = true;
       }
       //palloc_free_page(target_dir_copy);
     }
     
     /* Free the page for the target dir. */
-    palloc_free_page (target_dir);
+    // palloc_free_page (target_dir);
+    // palloc_free_page(target_dir_copy);
+    // free(target_dir);
+    free(target_dir_copy);
   }
   /**************************
    *       SYS_MKDIR        *
@@ -632,7 +647,7 @@ syscall_handler (struct intr_frame *f)
     f->eax = filesys_create (target_dir, 0, true);
     
     /* Free the page for the target dir. */
-    palloc_free_page (target_dir);
+    // palloc_free_page (target_dir);
   }
   /**************************
    *      SYS_READDIR       *
@@ -1056,14 +1071,16 @@ parse(char *path, bool is_relative){
   char *current_dir = current_thread->current_dir;
 
   char *result_path = palloc_get_page (0);
-  char *path_copy = palloc_get_page (0); 
+  // char *path_copy = palloc_get_page (0); 
+  char *path_copy = calloc(1, strlen(path) + 1);
   char *current_dir_copy = NULL; 
   char *result_path_token[10];
   char *token_path, *token_cur, *save_path, *save_cur;
   int idx = 0;
 
   if (is_relative){
-    current_dir_copy = palloc_get_page (0);
+    // current_dir_copy = palloc_get_page (0);
+    current_dir_copy = calloc(1, strlen(current_dir) + 1 );
     
     strlcpy (path_copy, path, PGSIZE);
     strlcpy (current_dir_copy, current_dir, PGSIZE);
@@ -1112,9 +1129,11 @@ parse(char *path, bool is_relative){
   }
   
   /* Free the pages. */
-  palloc_free_page (path_copy);
+  // palloc_free_page (path_copy);
+  free(path_copy);
   if (current_dir_copy!=NULL)
-    palloc_free_page (current_dir_copy);
+    // palloc_free_page (current_dir_copy);
+    free(current_dir_copy);
   
   return result_path;
 }
@@ -1229,15 +1248,23 @@ is_valid_chdir (void)
 {
   struct thread *current_thread = thread_current ();
   char *chdir = get_final_dir (current_thread->current_dir);
-  
+  // char *chdir_copy = palloc_get_page(0);
+  // strlcpy(chdir_copy, chdir, PGSIZE);
+  char *chdir_copy = calloc(1, strlen(chdir) + 1);
+  strlcpy(chdir_copy, chdir, strlen(chdir) + 1);
   char *tokens[10];
-  size_t num_token = parse_file_name (chdir, tokens);
+  size_t num_token = parse_file_name (chdir, chdir_copy, tokens);
   
   if (num_token == 0)
     return true;
   
-  if (!is_chdir_possible (tokens, num_token))
+  if (!is_chdir_possible (tokens, num_token)){
+    // palloc_free_page(chdir_copy);
+    free(chdir_copy);
     return false;
-  
+  }
+    
+  // palloc_free_page(chdir_copy);
+  free(chdir_copy);
   return true;
 }
