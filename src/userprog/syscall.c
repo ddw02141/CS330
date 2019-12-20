@@ -610,7 +610,7 @@ syscall_handler (struct intr_frame *f)
     /* If num_token is 0, it is the root directory. */
     if (num_token == 0)
     {
-      strlcpy (current_thread->current_dir, "/", 2);
+      strlcpy (current_thread->current_dir, "/", sizeof(current_thread->current_dir));
       f->eax = true;
     }
     else
@@ -621,6 +621,8 @@ syscall_handler (struct intr_frame *f)
       }
       else
       {
+        free(current_thread->current_dir);
+        current_thread->current_dir = calloc(1, strlen(target_dir) + 1);
         strlcpy (current_thread->current_dir, target_dir, strlen(target_dir) + 1);
         f->eax = true;
       }
@@ -1082,8 +1084,8 @@ parse(char *path, bool is_relative){
     // current_dir_copy = palloc_get_page (0);
     current_dir_copy = calloc(1, strlen(current_dir) + 1 );
     
-    strlcpy (path_copy, path, PGSIZE);
-    strlcpy (current_dir_copy, current_dir, PGSIZE);
+    strlcpy (path_copy, path, strlen(path) + 1);
+    strlcpy (current_dir_copy, current_dir, strlen(current_dir) + 1);
     
     /* First, tokenize the current directory and append it to result path token array. */
     for (token_cur = strtok_r (current_dir_copy, "/", &save_cur); token_cur != NULL;
