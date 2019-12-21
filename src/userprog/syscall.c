@@ -193,7 +193,9 @@ syscall_handler (struct intr_frame *f)
     {
       /* Get the absolute path for the file name. */
       char *file_name_abs = get_final_dir (file_name);
+      lock_acquire(&filesys_lock);
       f->eax = filesys_create (file_name_abs, size, false);
+      lock_release(&filesys_lock);
       
       /* Free the allocated memory for the absolute path. */
       palloc_free_page (file_name_abs);
@@ -209,7 +211,9 @@ syscall_handler (struct intr_frame *f)
     
     /* Get the absolute path for the file name. */
     char *file_name_abs = get_final_dir (file_name);
+    lock_acquire(&filesys_lock);
     f->eax = filesys_remove(file_name_abs);
+    lock_release(&filesys_lock);
 
     palloc_free_page (file_name_abs);
   }
@@ -250,7 +254,9 @@ syscall_handler (struct intr_frame *f)
       if (file == NULL && dir == NULL)
       {
         bool is_dir;
+        lock_acquire(&filesys_lock);
         void *new = filesys_open (file_name_abs, &is_dir);
+        lock_release(&filesys_lock);
         
         /* There's no such file. */
         if (new == NULL)
@@ -360,7 +366,9 @@ syscall_handler (struct intr_frame *f)
     }
     else
     {
+      lock_acquire(&filesys_lock);
       f->eax = file_length (file);
+      lock_release(&filesys_lock);
     }
   }
   
@@ -391,7 +399,9 @@ syscall_handler (struct intr_frame *f)
       }
       else
       {
+        lock_acquire(&filesys_lock);
         f->eax = file_read (file, buffer, size);
+        lock_release(&filesys_lock);
       }
     }
   }
@@ -430,7 +440,9 @@ syscall_handler (struct intr_frame *f)
       }
       else
       {
+        lock_acquire(&filesys_lock);
         f->eax = file_write (file, buffer, size);
+        lock_release(&filesys_lock);
       }
     }
   }
@@ -444,8 +456,11 @@ syscall_handler (struct intr_frame *f)
     unsigned pos = *((unsigned *) arg2);
     
     struct file *file = find_file_by_fd (fd);
-    if (file != NULL)
+    if (file != NULL){
+      lock_acquire(&filesys_lock);
       file_seek (file, pos);
+      lock_release(&filesys_lock);
+    }
   }
   
   /**************************
@@ -456,8 +471,13 @@ syscall_handler (struct intr_frame *f)
     int fd = *((int *) arg1);
     
     struct file *file = find_file_by_fd (fd);
-    if (file != NULL)
+    if (file != NULL){
+      lock_acquire(&filesys_lock);
       f->eax = file_tell (file);
+      lock_release(&filesys_lock);
+
+    }
+      
     else
       f->eax = -1;
   }
@@ -479,7 +499,10 @@ syscall_handler (struct intr_frame *f)
       list_remove (&file->elem);
       lock_release (&current_thread->file_list_lock);
       
+      lock_acquire(&filesys_lock);
       file_close (file);
+      lock_release(&filesys_lock);
+      
     }
     else if (dir != NULL)
     {
@@ -487,7 +510,10 @@ syscall_handler (struct intr_frame *f)
       list_remove (&dir->elem);
       lock_release (&current_thread->dir_list_lock);
       
+      lock_acquire(&filesys_lock);
       dir_close (dir);
+      lock_release(&filesys_lock);
+      
     }
     else
     {
@@ -544,7 +570,11 @@ syscall_handler (struct intr_frame *f)
     lock_release (&current_thread->file_list_lock);
     
     /* If target file has length 0, fail. */
+    lock_acquire(&filesys_lock);
     off_t file_size = file_length (new_file);
+    lock_release(&filesys_lock);
+      
+    
     if (file_size == 0)
     {
       f->eax = -1;
@@ -646,7 +676,9 @@ syscall_handler (struct intr_frame *f)
     char *target_dir = get_final_dir (dir);
     
     /* Try creating a directory with absolute path. */
+    lock_acquire(&filesys_lock);
     f->eax = filesys_create (target_dir, 0, true);
+    lock_release(&filesys_lock);
     
     /* Free the page for the target dir. */
     // palloc_free_page (target_dir);
@@ -668,8 +700,11 @@ syscall_handler (struct intr_frame *f)
 //    struct dir *target_dir = dir_open (dir->inode);
     
     /* Read directory. */
-    // printf("current_dir : %s\n", thread_current()->current_dir);
+
+    lock_acquire(&filesys_lock);
     bool readdir_success = dir_readdir (dir, name);
+    lock_release(&filesys_lock);
+    
     // printf("dir : %s\n", dir->dir_name);
     // printf("name[0] : %s\n", name[0]);
     // printf("name[1] : %s\n", name[1]);
@@ -850,6 +885,8 @@ find_file_by_fd (int fd)
   struct thread *current_thread = thread_current ();
   struct list *file_list = &(current_thread->file_list);
   struct list_elem *e;
+
+
 
   if (!list_empty (file_list))
   {
